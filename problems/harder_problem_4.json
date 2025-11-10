@@ -1,0 +1,15 @@
+{
+    "title": "Count and Say",
+    "description": "Ask how many times to print 'Hi' and count each line.",
+    "input_format": "One number per line.",
+    "test_cases": [
+        {
+            "input": "2",
+            "output": "Hi number 1\nHi number 2"
+        },
+        {
+            "input": "3",
+            "output": "Hi number 1\nHi number 2\nHi number 3"
+        }
+    ]
+}

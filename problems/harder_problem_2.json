@@ -1,0 +1,19 @@
+{
+    "title": "Uppercase Favorite Color",
+    "description": "Ask for the user's favorite color and print it in uppercase.",
+    "input_format": "One word per line.",
+    "test_cases": [
+        {
+            "input": "blue",
+            "output": "YOUR COLOR IS BLUE"
+        },
+        {
+            "input": "red",
+            "output": "YOUR COLOR IS RED"
+        },
+        {
+            "input": "green",
+            "output": "YOUR COLOR IS GREEN"
+        }
+    ]
+}

@@ -1,0 +1,116 @@
+# -*- coding: utf-8 -*-
+"""
+Unified Data Manager
+Automatically uses Firebase if configured, falls back to local JSON storage
+"""
+import os
+from typing import Dict, List, Optional
+from firebase_config import FirebaseConfig
+
+
+class DataManager:
+    """
+    Unified data manager that automatically chooses between Firebase and local JSON.
+    
+    Priority:
+    1. Firebase (if credentials are configured)
+    2. Local JSON (fallback)
+    """
+    
+    def __init__(self):
+        """Initialize the appropriate data manager"""
+        self.backend = None
+        self.backend_type = None
+        self._initialize_backend()
+    
+    def _initialize_backend(self):
+        """Choose and initialize the appropriate backend"""
+        # Try Firebase first
+        if FirebaseConfig.is_configured():
+            try:
+                from firebase_data_manager import FirebaseDataManager
+                self.backend = FirebaseDataManager()
+                self.backend_type = "firebase"
+                print("✓ Connected to Firebase Firestore")
+                return
+            except Exception as e:
+                print(f"⚠ Firebase initialization failed: {e}")
+                print("→ Falling back to local JSON storage")
+        else:
+            print("ℹ Firebase not configured, using local JSON storage")
+            print("  To use Firebase: Create 'firebase_credentials.json' with your service account key")
+        
+        # Fallback to JSON
+        from competition_data_manager import CompetitionDataManager
+        self.backend = CompetitionDataManager()
+        self.backend_type = "json"
+    
+    def get_backend_type(self) -> str:
+        """Get the current backend type"""
+        return self.backend_type
+    
+    def is_firebase(self) -> bool:
+        """Check if using Firebase backend"""
+        return self.backend_type == "firebase"
+    
+    def is_json(self) -> bool:
+        """Check if using JSON backend"""
+        return self.backend_type == "json"
+    
+    # Proxy all methods to the backend
+    
+    def start_competition(self):
+        """Mark competition as started"""
+        return self.backend.start_competition()
+    
+    def register_competitor(self, name: str) -> bool:
+        """Register a new competitor"""
+        return self.backend.register_competitor(name)
+    
+    def update_competitor_problem(self, name: str, problem_id: int):
+        """Update which problem the competitor is currently viewing"""
+        return self.backend.update_competitor_problem(name, problem_id)
+    
+    def submit_solution(self, name: str, problem_id: int, code: str, 
+                       test_results: List[dict], all_passed: bool):
+        """Record a solution submission"""
+        return self.backend.submit_solution(name, problem_id, code, test_results, all_passed)
+    
+    def get_competitor_data(self, name: str) -> Optional[dict]:
+        """Get data for a specific competitor"""
+        return self.backend.get_competitor_data(name)
+    
+    def get_all_competitors(self) -> Dict[str, dict]:
+        """Get data for all competitors"""
+        return self.backend.get_all_competitors()
+    
+    def get_leaderboard(self) -> List[dict]:
+        """Generate leaderboard data"""
+        return self.backend.get_leaderboard()
+    
+    def get_problem_statistics(self) -> dict:
+        """Get statistics for each problem"""
+        return self.backend.get_problem_statistics()
+    
+    def reset_competition(self):
+        """Reset all competition data"""
+        return self.backend.reset_competition()
+    
+    def is_name_taken(self, name: str) -> bool:
+        """Check if a competitor name is already taken"""
+        return self.backend.is_name_taken(name)
+    
+    def add_listener(self, callback):
+        """
+        Add a real-time listener (Firebase only)
+        Falls back gracefully for JSON backend
+        """
+        if hasattr(self.backend, 'add_listener'):
+            return self.backend.add_listener(callback)
+        return None
+
+
+# Convenience function for creating data manager
+def create_data_manager():
+    """Create and return a data manager instance"""
+    return DataManager()

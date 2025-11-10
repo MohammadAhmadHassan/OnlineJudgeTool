@@ -1,0 +1,13 @@
+
+  
+  {
+    "title": "Gender and Age Access",
+    "description": "Ask for gender and age. Allow access only if female and exactly 12.",
+    "input_format": "Gender and age, each on a new line.",
+    "test_cases": [
+      {"input": "female\n12", "output": "Access granted"},
+      {"input": "male\n12", "output": "Access denied"},
+      {"input": "female\n11", "output": "Access denied"},
+      {"input": "male\n10", "output": "Access denied"}
+    ]
+  }

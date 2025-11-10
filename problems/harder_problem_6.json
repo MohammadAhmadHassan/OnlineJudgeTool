@@ -1,0 +1,15 @@
+{
+    "title": "Confirm Start with While Loop",
+    "description": "Keep asking the user to type 'start' until they do.",
+    "input_format": "Multiple attempts, one per line.",
+    "test_cases": [
+        {
+            "input": "no\nmaybe\nstart",
+            "output": "Try again\nTry again\nStarted!"
+        },
+        {
+            "input": "go\nready\nStart",
+            "output": "Try again\nTry again\nStarted!"
+        }
+    ]
+}

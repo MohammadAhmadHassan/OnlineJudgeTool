@@ -1,0 +1,15 @@
+{
+    "title": "Count Up with Only Odds",
+    "description": "Ask for a number, count from 1 to that number, printing only odd numbers.",
+    "input_format": "One number per line.",
+    "test_cases": [
+        {
+            "input": "5",
+            "output": "1\n3\n5"
+        },
+        {
+            "input": "4",
+            "output": "1\n3"
+        }
+    ]
+}

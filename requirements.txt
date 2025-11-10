@@ -1,0 +1,10 @@
+# Firebase Dependencies for Python Coding Competition Tool
+
+# Firebase Admin SDK for Firestore database
+firebase-admin>=6.2.0
+
+# Image processing (already required)
+Pillow>=10.0.0
+
+# Optional: For better performance
+grpcio>=1.59.0

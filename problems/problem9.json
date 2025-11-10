@@ -1,0 +1,19 @@
+{
+    "title": "Get First 3 Letters",
+    "description": "Ask for a name and print the first 3 letters using slicing.",
+    "input_format": "One word per line.",
+    "test_cases": [
+        {
+            "input": "Jonathan",
+            "output": "Jon"
+        },
+        {
+            "input": "Lily",
+            "output": "Lil"
+        },
+        {
+            "input": "Tom",
+            "output": "Tom"
+        }
+    ]
+}

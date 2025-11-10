@@ -1,0 +1,11 @@
+
+{
+    "title": "Middle Letter",
+    "description": "Ask for a word and print the middle letter (assume odd length).",
+    "input_format": "One word per line.",
+    "test_cases": [
+      {"input": "cat", "output": "a"},
+      {"input": "apple", "output": "p"},
+      {"input": "hello", "output": "l"}
+    ]
+  }

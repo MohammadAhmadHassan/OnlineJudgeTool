@@ -1,0 +1,15 @@
+{
+    "title": "Print Initials",
+    "description": "Ask for first and last name and print the initials.",
+    "input_format": "Two words, each on a separate line.",
+    "test_cases": [
+        {
+            "input": "John\nSmith",
+            "output": "Your initials are JS"
+        },
+        {
+            "input": "Ali\nZaki",
+            "output": "Your initials are AZ"
+        }
+    ]
+}
