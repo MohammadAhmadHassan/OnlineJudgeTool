@@ -213,14 +213,26 @@ class FirebaseDataManager:
             
             for name, competitor in competitors.items():
                 total_solved = 0
+                approved_problems = 0
                 total_tests_passed = 0
                 total_submissions = 0
                 
                 problems = competitor.get('problems', {})
+                rejected_problems = 0
+                
                 for problem_id, problem_data in problems.items():
                     best_result = problem_data.get('best_result', {})
+                    judge_approval = problem_data.get('judge_approval')
+                    
+                    # Count as solved if all tests passed
                     if best_result and best_result.get('all_passed', False):
                         total_solved += 1
+                        # Count as approved only if judge approved
+                        if judge_approval == 'approved':
+                            approved_problems += 1
+                        elif judge_approval == 'rejected':
+                            rejected_problems += 1
+                    
                     if best_result:
                         total_tests_passed += best_result.get('passed_tests', 0)
                     total_submissions += len(problem_data.get('submissions', []))
@@ -228,14 +240,23 @@ class FirebaseDataManager:
                 leaderboard.append({
                     'name': name,
                     'problems_solved': total_solved,
+                    'approved_problems': approved_problems,  # Judge approved count
+                    'rejected_problems': rejected_problems,  # Judge rejected count
                     'total_tests_passed': total_tests_passed,
                     'total_submissions': total_submissions,
                     'current_problem': competitor.get('current_problem', 1),
                     'last_activity': competitor.get('last_activity', '')
                 })
             
-            # Sort by problems solved (desc), then by total tests passed (desc)
-            leaderboard.sort(key=lambda x: (-x['problems_solved'], -x['total_tests_passed']))
+            # Sort by approved problems (desc), then by problems solved (desc), then by total tests passed (desc)
+            leaderboard.sort(key=lambda x: (-x['approved_problems'], -x['problems_solved'], -x['total_tests_passed']))
+            
+            # Debug: Print leaderboard data
+            print(f"[DEBUG] Leaderboard generated with {len(leaderboard)} competitors")
+            for entry in leaderboard[:3]:  # Print top 3
+                score = entry['approved_problems'] - entry['rejected_problems']
+                print(f"  - {entry['name']}: solved={entry['problems_solved']}, approved={entry['approved_problems']}, rejected={entry['rejected_problems']}, score={score:+d}")
+            
             return leaderboard
         except Exception as e:
             print(f"Error generating leaderboard: {e}")
@@ -289,6 +310,47 @@ class FirebaseDataManager:
             print("Competition data reset successfully")
         except Exception as e:
             print(f"Error resetting competition: {e}")
+    
+    def set_judge_approval(self, name: str, problem_id: int, status: str):
+        """Set judge approval status for a problem (approved/rejected)"""
+        try:
+            problem_id_str = str(problem_id)
+            doc_ref = self.competitors_ref.document(name)
+            
+            # Get current data and update it
+            doc = doc_ref.get()
+            if not doc.exists:
+                print(f"[ERROR] Competitor {name} not found in database")
+                return
+            
+            data = doc.to_dict()
+            problems = data.get('problems', {})
+            
+            if problem_id_str not in problems:
+                print(f"[WARNING] Problem {problem_id} not found for {name}. Available problems: {list(problems.keys())}")
+                return
+            
+            # Modify the problems dictionary directly
+            problems[problem_id_str]['judge_approval'] = status
+            problems[problem_id_str]['judge_approval_time'] = datetime.now().isoformat()
+            
+            # Update the entire problems field
+            doc_ref.update({
+                'problems': problems
+            })
+            
+            print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
+            print(f"[DEBUG] Updated problems field in Firestore")
+            
+            # Verify the update by reading back
+            verify_doc = doc_ref.get()
+            if verify_doc.exists:
+                verify_data = verify_doc.to_dict()
+                verify_status = verify_data.get('problems', {}).get(problem_id_str, {}).get('judge_approval')
+                print(f"[VERIFY] Read back judge_approval status: {verify_status}")
+        except Exception as e:
+            print(f"Error setting judge approval: {e}")
+            raise
     
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""

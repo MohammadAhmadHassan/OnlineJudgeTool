@@ -15,11 +15,9 @@ class CompetitionLauncher:
     def __init__(self, root):
         self.root = root
         self.root.title("Python Coding Competition - Role Selection")
-        self.root.geometry("750x650")
+        # Start maximized to fit window
+        self.root.state('zoomed')
         self.root.resizable(True, True)
-        
-        # Center window
-        self.center_window()
         
         # Colors
         self.colors = {
@@ -85,22 +83,26 @@ class CompetitionLauncher:
         # Check database connection
         self.check_database_connection()
         
-        # Main container
+        # Main container with center alignment
         main_container = ttk.Frame(self.root)
         main_container.pack(fill=tk.BOTH, expand=True)
         
+        # Center frame to hold all content
+        center_frame = ttk.Frame(main_container)
+        center_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        
         # Header
-        self.create_header(main_container)
+        self.create_header(center_frame)
         
         # Content
-        content = ttk.Frame(main_container)
+        content = ttk.Frame(center_frame)
         content.pack(fill=tk.BOTH, expand=True, padx=40, pady=30)
         
         # Role selection cards
         self.create_role_cards(content)
         
         # Footer
-        self.create_footer(main_container)
+        self.create_footer(center_frame)
     
     def check_database_connection(self):
         """Check and display database connection status"""
@@ -109,12 +111,12 @@ class CompetitionLauncher:
             backend_type = dm.get_backend_type()
             
             if backend_type == "firebase":
-                print("✓ Using Firebase Firestore for multi-device synchronization")
+                print("[OK] Using Firebase Firestore for multi-device synchronization")
             else:
-                print("ℹ Using local JSON storage (single device)")
+                print("[INFO] Using local JSON storage (single device)")
                 print("  To enable multi-device support, configure Firebase credentials")
         except Exception as e:
-            print(f"⚠ Database initialization warning: {e}")
+            print(f"[WARNING] Database initialization warning: {e}")
     
     def create_header(self, parent):
         """Create header section"""

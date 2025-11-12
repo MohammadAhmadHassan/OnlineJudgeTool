@@ -31,13 +31,13 @@ class DataManager:
                 from firebase_data_manager import FirebaseDataManager
                 self.backend = FirebaseDataManager()
                 self.backend_type = "firebase"
-                print("✓ Connected to Firebase Firestore")
+                print("[OK] Connected to Firebase Firestore")
                 return
             except Exception as e:
-                print(f"⚠ Firebase initialization failed: {e}")
-                print("→ Falling back to local JSON storage")
+                print(f"[WARNING] Firebase initialization failed: {e}")
+                print("[INFO] Falling back to local JSON storage")
         else:
-            print("ℹ Firebase not configured, using local JSON storage")
+            print("[INFO] Firebase not configured, using local JSON storage")
             print("  To use Firebase: Create 'firebase_credentials.json' with your service account key")
         
         # Fallback to JSON
@@ -99,6 +99,10 @@ class DataManager:
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""
         return self.backend.is_name_taken(name)
+    
+    def set_judge_approval(self, name: str, problem_id: int, status: str):
+        """Set judge approval status for a problem (approved/rejected)"""
+        return self.backend.set_judge_approval(name, problem_id, status)
     
     def add_listener(self, callback):
         """

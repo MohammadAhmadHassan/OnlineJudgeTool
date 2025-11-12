@@ -39,7 +39,7 @@ class FirebaseConfig:
             return None
         
         try:
-            with open(FirebaseConfig.CONFIG_FILE, 'r') as f:
+            with open(FirebaseConfig.CONFIG_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
             return None
@@ -86,7 +86,7 @@ class FirebaseConfig:
         }
         
         if not os.path.exists(FirebaseConfig.CONFIG_FILE):
-            with open(FirebaseConfig.CONFIG_FILE, 'w') as f:
+            with open(FirebaseConfig.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(sample, f, indent=2)
             return True
         return False

@@ -14,7 +14,8 @@ class SpectatorDashboard:
         self.root = root
         self.data_manager = data_manager
         self.root.title("Spectator View - Live Competition")
-        self.root.geometry("1100x750")
+        # Start maximized to fit window
+        self.root.state('zoomed')
         self.root.minsize(900, 600)
         
         # Colors
@@ -83,8 +84,16 @@ class SpectatorDashboard:
         # Header
         self.create_header(main_container)
         
+        # Center frame to hold all content
+        center_outer = ttk.Frame(main_container)
+        center_outer.pack(fill=tk.BOTH, expand=True)
+        
+        # Create a centered column for content
+        center_column = ttk.Frame(center_outer)
+        center_column.place(relx=0.5, rely=0.5, anchor=tk.CENTER, relwidth=0.85, relheight=0.95)
+        
         # Use simpler frame layout instead of canvas for better performance
-        scrollable_container = ttk.Frame(main_container)
+        scrollable_container = ttk.Frame(center_column)
         scrollable_container.pack(fill=tk.BOTH, expand=True)
         
         # Vertical scrollbar
@@ -116,7 +125,7 @@ class SpectatorDashboard:
         
         # Content area
         content = ttk.Frame(scrollable_frame)
-        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        content.pack(fill=tk.BOTH, expand=True, padx=40, pady=20)
         
         # Top 3 podium
         self.create_podium(content)
@@ -209,10 +218,19 @@ class SpectatorDashboard:
         stats_frame = ttk.Frame(card, style='Card.TFrame')
         stats_frame.pack(pady=10)
         
+        # Approved problems
+        approved_frame = ttk.Frame(stats_frame, style='Card.TFrame')
+        approved_frame.pack(pady=2)
+        ttk.Label(approved_frame, text="[OK] Approved: ", style='Stat.TLabel',
+                 foreground='#6c757d').pack(side=tk.LEFT)
+        approved_var = tk.StringVar(value="0/0")
+        ttk.Label(approved_frame, textvariable=approved_var, style='Stat.TLabel',
+                 foreground='#27ae60', font=('Segoe UI', 11, 'bold')).pack(side=tk.LEFT)
+        
         # Problems solved
         solved_frame = ttk.Frame(stats_frame, style='Card.TFrame')
         solved_frame.pack(pady=2)
-        ttk.Label(solved_frame, text="✓ Solved: ", style='Stat.TLabel',
+        ttk.Label(solved_frame, text="[v] Solved: ", style='Stat.TLabel',
                  foreground='#6c757d').pack(side=tk.LEFT)
         solved_var = tk.StringVar(value="0")
         ttk.Label(solved_frame, textvariable=solved_var, style='Stat.TLabel',
@@ -221,7 +239,7 @@ class SpectatorDashboard:
         # Submissions
         sub_frame = ttk.Frame(stats_frame, style='Card.TFrame')
         sub_frame.pack(pady=2)
-        ttk.Label(sub_frame, text="📝 Submissions: ", style='Stat.TLabel',
+        ttk.Label(sub_frame, text="[#] Submissions: ", style='Stat.TLabel',
                  foreground='#6c757d').pack(side=tk.LEFT)
         sub_var = tk.StringVar(value="0")
         ttk.Label(sub_frame, textvariable=sub_var, style='Stat.TLabel',
@@ -230,7 +248,7 @@ class SpectatorDashboard:
         # Current problem
         current_frame = ttk.Frame(stats_frame, style='Card.TFrame')
         current_frame.pack(pady=2)
-        ttk.Label(current_frame, text="📋 Working on: ", style='Stat.TLabel',
+        ttk.Label(current_frame, text="[...] Working on: ", style='Stat.TLabel',
                  foreground='#6c757d').pack(side=tk.LEFT)
         current_var = tk.StringVar(value="--")
         ttk.Label(current_frame, textvariable=current_var, style='Stat.TLabel').pack(side=tk.LEFT)
@@ -238,6 +256,7 @@ class SpectatorDashboard:
         # Store variables for updating
         card_vars = {
             'name_var': name_var,
+            'approved_var': approved_var,
             'solved_var': solved_var,
             'sub_var': sub_var,
             'current_var': current_var
@@ -262,24 +281,26 @@ class SpectatorDashboard:
         tree_frame = ttk.Frame(board_frame, style='Card.TFrame')
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
         
-        columns = ("rank", "name", "solved", "tests", "submissions", "current")
+        columns = ("rank", "name", "approved", "solved", "tests", "submissions", "current")
         self.leaderboard_tree = ttk.Treeview(tree_frame, columns=columns,
                                             show="headings", selectmode='none')
         
         # Configure columns
         self.leaderboard_tree.heading("rank", text="Rank")
         self.leaderboard_tree.heading("name", text="Competitor")
+        self.leaderboard_tree.heading("approved", text="Judge Status")
         self.leaderboard_tree.heading("solved", text="Solved")
         self.leaderboard_tree.heading("tests", text="Tests Passed")
         self.leaderboard_tree.heading("submissions", text="Submissions")
         self.leaderboard_tree.heading("current", text="Current Problem")
         
         self.leaderboard_tree.column("rank", width=70, stretch=False, anchor=tk.CENTER)
-        self.leaderboard_tree.column("name", width=200, stretch=True)
-        self.leaderboard_tree.column("solved", width=100, stretch=False, anchor=tk.CENTER)
-        self.leaderboard_tree.column("tests", width=120, stretch=False, anchor=tk.CENTER)
-        self.leaderboard_tree.column("submissions", width=120, stretch=False, anchor=tk.CENTER)
-        self.leaderboard_tree.column("current", width=150, stretch=False, anchor=tk.CENTER)
+        self.leaderboard_tree.column("name", width=180, stretch=True)
+        self.leaderboard_tree.column("approved", width=110, stretch=False, anchor=tk.CENTER)
+        self.leaderboard_tree.column("solved", width=90, stretch=False, anchor=tk.CENTER)
+        self.leaderboard_tree.column("tests", width=110, stretch=False, anchor=tk.CENTER)
+        self.leaderboard_tree.column("submissions", width=110, stretch=False, anchor=tk.CENTER)
+        self.leaderboard_tree.column("current", width=140, stretch=False, anchor=tk.CENTER)
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
@@ -356,6 +377,7 @@ class SpectatorDashboard:
         for rank in [1, 2, 3]:
             if rank in self.podium_cards:
                 self.podium_cards[rank]['name_var'].set("--")
+                self.podium_cards[rank]['approved_var'].set("0/0")
                 self.podium_cards[rank]['solved_var'].set("0")
                 self.podium_cards[rank]['sub_var'].set("0")
                 self.podium_cards[rank]['current_var'].set("--")
@@ -364,7 +386,21 @@ class SpectatorDashboard:
         for i, entry in enumerate(leaderboard[:3], 1):
             if i in self.podium_cards:
                 card = self.podium_cards[i]
+                approved_count = entry.get('approved_problems', 0)
+                rejected_count = entry.get('rejected_problems', 0)
+                
+                # Calculate approval score: +1 for approved, -1 for rejected
+                approval_score = approved_count - rejected_count
+                
+                if approval_score > 0:
+                    approved_display = f"+{approval_score}"
+                elif approval_score < 0:
+                    approved_display = f"{approval_score}"
+                else:
+                    approved_display = "0"
+                
                 card['name_var'].set(entry['name'])
+                card['approved_var'].set(approved_display)
                 card['solved_var'].set(str(entry['problems_solved']))
                 card['sub_var'].set(str(entry['total_submissions']))
                 card['current_var'].set(f"Problem {entry['current_problem']}")
@@ -393,9 +429,25 @@ class SpectatorDashboard:
             else:
                 rank = str(i)
             
+            # Format approved problems display with +/- notation
+            # Count: approved (+1 each), rejected (-1 each), pending (0)
+            approved_count = entry.get('approved_problems', 0)
+            rejected_count = entry.get('rejected_problems', 0)
+            
+            # Calculate total: +1 for approved, -1 for rejected
+            approval_score = approved_count - rejected_count
+            
+            if approval_score > 0:
+                approved_display = f"+{approval_score}"
+            elif approval_score < 0:
+                approved_display = f"{approval_score}"  # Already has minus sign
+            else:
+                approved_display = "0"
+            
             new_values = (
                 rank,
                 entry['name'],
+                approved_display,
                 entry['problems_solved'],
                 entry['total_tests_passed'],
                 entry['total_submissions'],

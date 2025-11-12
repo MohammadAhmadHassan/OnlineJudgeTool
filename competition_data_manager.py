@@ -33,18 +33,18 @@ class CompetitionDataManager:
         """Load competition data from file"""
         with self.lock:
             try:
-                with open(self.data_file, 'r') as f:
+                with open(self.data_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 self.initialize_data()
-                with open(self.data_file, 'r') as f:
+                with open(self.data_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
     
     def save_data(self, data: dict):
         """Save competition data to file"""
         with self.lock:
-            with open(self.data_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            with open(self.data_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
     
     def start_competition(self):
         """Mark competition as started"""
@@ -131,26 +131,38 @@ class CompetitionDataManager:
         
         for name, competitor in data["competitors"].items():
             total_solved = 0
+            approved_problems = 0
+            rejected_problems = 0
             total_tests_passed = 0
             total_submissions = 0
             
             for problem_id, problem_data in competitor["problems"].items():
+                judge_approval = problem_data.get("judge_approval")
+                
                 if problem_data.get("best_result", {}).get("all_passed", False):
                     total_solved += 1
+                    # Count as approved only if judge approved
+                    if judge_approval == 'approved':
+                        approved_problems += 1
+                    elif judge_approval == 'rejected':
+                        rejected_problems += 1
+                
                 total_tests_passed += problem_data.get("best_result", {}).get("passed_tests", 0)
                 total_submissions += len(problem_data.get("submissions", []))
             
             leaderboard.append({
                 "name": name,
                 "problems_solved": total_solved,
+                "approved_problems": approved_problems,  # Judge approved count
+                "rejected_problems": rejected_problems,  # Judge rejected count
                 "total_tests_passed": total_tests_passed,
                 "total_submissions": total_submissions,
                 "current_problem": competitor.get("current_problem", 1),
                 "last_activity": competitor.get("last_activity", "")
             })
         
-        # Sort by problems solved (desc), then by total tests passed (desc)
-        leaderboard.sort(key=lambda x: (-x["problems_solved"], -x["total_tests_passed"]))
+        # Sort by approved problems (desc), then by problems solved (desc), then by total tests passed (desc)
+        leaderboard.sort(key=lambda x: (-x["approved_problems"], -x["problems_solved"], -x["total_tests_passed"]))
         return leaderboard
     
     def get_problem_statistics(self) -> dict:
@@ -184,6 +196,27 @@ class CompetitionDataManager:
             "problems_loaded": []
         }
         self.save_data(initial_data)
+    
+    def set_judge_approval(self, name: str, problem_id: int, status: str):
+        """Set judge approval status for a problem (approved/rejected)"""
+        data = self.load_data()
+        
+        if name in data["competitors"]:
+            problem_id_str = str(problem_id)
+            if "problems" not in data["competitors"][name]:
+                data["competitors"][name]["problems"] = {}
+            
+            # Check if problem has been submitted
+            if problem_id_str not in data["competitors"][name]["problems"]:
+                print(f"[WARNING] Problem {problem_id} not found for {name}. Creating entry anyway.")
+                data["competitors"][name]["problems"][problem_id_str] = {}
+            
+            data["competitors"][name]["problems"][problem_id_str]["judge_approval"] = status
+            data["competitors"][name]["problems"][problem_id_str]["judge_approval_time"] = datetime.now().isoformat()
+            
+            self.save_data(data)
+            print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
+            print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
     
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""

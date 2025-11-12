@@ -20,7 +20,8 @@ class ImprovedCompetitorApp:
         self.root = root
         self.data_manager = data_manager
         self.root.title("Competitor View - Python Coding Competition")
-        self.root.geometry("1200x850")
+        # Start maximized to fit window
+        self.root.state('zoomed')
         self.root.minsize(1000, 700)
         
         # Modern color scheme
@@ -124,8 +125,16 @@ class ImprovedCompetitorApp:
         # Action buttons at the top (always visible)
         self.create_action_buttons(main_container)
         
+        # Center frame to hold all content
+        center_outer = ttk.Frame(main_container)
+        center_outer.pack(fill=tk.BOTH, expand=True)
+        
+        # Create a centered column for content (narrower for better visual centering)
+        center_column = ttk.Frame(center_outer)
+        center_column.place(relx=0.5, rely=0.5, anchor=tk.CENTER, relwidth=0.85, relheight=0.95)
+        
         # Use simpler scrolling with frame instead of canvas for better performance
-        scrollable_container = ttk.Frame(main_container)
+        scrollable_container = ttk.Frame(center_column)
         scrollable_container.pack(fill=tk.BOTH, expand=True)
         
         # Vertical scrollbar only
@@ -155,9 +164,9 @@ class ImprovedCompetitorApp:
             self.scroll_container.yview_scroll(int(-1*(event.delta/120)), "units")
         self.scroll_container.bind("<MouseWheel>", _on_mousewheel)
         
-        # Content area with padding
+        # Content area with padding - increased for better centering
         content_frame = ttk.Frame(scrollable_frame)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=60, pady=20)
         
         # Problem navigation
         self.create_navigation(content_frame)
@@ -385,10 +394,19 @@ class ImprovedCompetitorApp:
     def load_problems(self):
         """Load all problems from JSON files"""
         self.problems = []
-        problems_dir = "problems"
+        
+        # Handle PyInstaller bundled resources
+        if getattr(sys, 'frozen', False):
+            # Running as executable
+            base_path = sys._MEIPASS
+        else:
+            # Running as script
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        problems_dir = os.path.join(base_path, "problems")
         
         if not os.path.exists(problems_dir):
-            messagebox.showerror("Error", "Problems directory not found!")
+            messagebox.showerror("Error", f"Problems directory not found!\nLooked in: {problems_dir}")
             return
         
         # Load regular problems
@@ -551,7 +569,18 @@ class ImprovedCompetitorApp:
         
         self.status_var.set("⏳ Running tests...")
         self.run_btn.config(state=tk.DISABLED)
+        self.submit_btn.config(state=tk.DISABLED)
         self.root.update()
+        
+        # Run tests in a separate thread to keep UI responsive
+        import threading
+        thread = threading.Thread(target=self._run_tests_thread, 
+                                 args=(problem, problem_id, student_code), 
+                                 daemon=True)
+        thread.start()
+    
+    def _run_tests_thread(self, problem, problem_id, student_code):
+        """Run tests in background thread"""
         
         # Create temporary directory
         temp_dir = tempfile.mkdtemp()
@@ -560,6 +589,8 @@ class ImprovedCompetitorApp:
         
         try:
             for i, test_case in enumerate(problem['test_cases']):
+                # Update status for this test
+                self.root.after(0, lambda idx=i: self.status_var.set(f"⏳ Running test {idx+1}/{len(problem['test_cases'])}..."))
                 temp_file = os.path.join(temp_dir, f"test_{problem_id}_{i}.py")
                 
                 # Create test program
@@ -579,15 +610,31 @@ class ImprovedCompetitorApp:
                 
                 # Execute code
                 try:
-                    # Use sys.executable which should work in venv
+                    # Set environment to force UTF-8 encoding
+                    env = os.environ.copy()
+                    env['PYTHONIOENCODING'] = 'utf-8'
+                    
+                    # Find the correct Python interpreter
+                    # When frozen (executable), use system Python or bundled Python
+                    if getattr(sys, 'frozen', False):
+                        # Use system Python when running as executable
+                        python_cmd = 'python'
+                    else:
+                        # Use the current Python interpreter when running as script
+                        python_cmd = sys.executable
+                    
+                    # Run with subprocess
                     process = subprocess.Popen(
-                        [sys.executable, temp_file],
+                        [python_cmd, temp_file],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
-                        cwd=temp_dir  # Set working directory
+                        encoding='utf-8',
+                        errors='replace',
+                        cwd=temp_dir,
+                        env=env
                     )
-                    stdout, stderr = process.communicate(timeout=5)
+                    stdout, stderr = process.communicate(timeout=30)
                     
                     # Check for errors
                     if stderr:
@@ -602,19 +649,24 @@ class ImprovedCompetitorApp:
                     expected_output = test_case['output'].strip()
                     passed = student_output == expected_output
                     
-                    # Update tree
+                    # Update tree (schedule on main thread) - capture values in closure
                     status = "✓ Passed" if passed else "✗ Failed"
                     status_color = self.colors['success'] if passed else self.colors['error']
                     
-                    item = self.test_tree.get_children()[i]
-                    self.test_tree.item(item, values=(
-                        status,
-                        self.truncate_text(test_case['input']),
-                        self.truncate_text(student_output),
-                        self.truncate_text(expected_output)
-                    ))
-                    self.test_tree.tag_configure(f"row{i}", foreground=status_color)
-                    self.test_tree.item(item, tags=(f"row{i}",))
+                    # Use default arguments to capture current values (avoid closure issues)
+                    def update_tree(idx=i, st=status, tc_in=test_case['input'], 
+                                  s_out=student_output, e_out=expected_output, color=status_color):
+                        item = self.test_tree.get_children()[idx]
+                        self.test_tree.item(item, values=(
+                            st,
+                            self.truncate_text(tc_in),
+                            self.truncate_text(s_out),
+                            self.truncate_text(e_out)
+                        ))
+                        self.test_tree.tag_configure(f"row{idx}", foreground=color)
+                        self.test_tree.item(item, tags=(f"row{idx}",))
+                    
+                    self.root.after(0, update_tree)
                     
                     test_results.append({
                         "test_id": i + 1,
@@ -628,15 +680,19 @@ class ImprovedCompetitorApp:
                         all_passed = False
                 
                 except subprocess.TimeoutExpired:
-                    item = self.test_tree.get_children()[i]
-                    self.test_tree.item(item, values=(
-                        "⏱ Timeout",
-                        self.truncate_text(test_case['input']),
-                        "Execution timeout",
-                        self.truncate_text(test_case['output'])
-                    ))
-                    self.test_tree.tag_configure(f"row{i}", foreground=self.colors['warning'])
-                    self.test_tree.item(item, tags=(f"row{i}",))
+                    # Capture values to avoid closure issues
+                    def update_timeout(idx=i, tc_in=test_case['input'], tc_out=test_case['output']):
+                        item = self.test_tree.get_children()[idx]
+                        self.test_tree.item(item, values=(
+                            "⏱ Timeout",
+                            self.truncate_text(tc_in),
+                            "Execution timeout",
+                            self.truncate_text(tc_out)
+                        ))
+                        self.test_tree.tag_configure(f"row{idx}", foreground=self.colors['warning'])
+                        self.test_tree.item(item, tags=(f"row{idx}",))
+                    
+                    self.root.after(0, update_timeout)
                     
                     test_results.append({
                         "test_id": i + 1,
@@ -644,18 +700,22 @@ class ImprovedCompetitorApp:
                         "error": "Timeout"
                     })
                     all_passed = False
-                    process.kill()
                 
                 except Exception as e:
-                    item = self.test_tree.get_children()[i]
-                    self.test_tree.item(item, values=(
-                        "✗ Error",
-                        self.truncate_text(test_case['input']),
-                        self.truncate_text(str(e), 100),
-                        self.truncate_text(test_case['output'])
-                    ))
-                    self.test_tree.tag_configure(f"row{i}", foreground=self.colors['error'])
-                    self.test_tree.item(item, tags=(f"row{i}",))
+                    error_msg = str(e)
+                    # Capture values to avoid closure issues
+                    def update_error(idx=i, tc_in=test_case['input'], err=error_msg, tc_out=test_case['output']):
+                        item = self.test_tree.get_children()[idx]
+                        self.test_tree.item(item, values=(
+                            "✗ Error",
+                            self.truncate_text(tc_in),
+                            self.truncate_text(err, 100),
+                            self.truncate_text(tc_out)
+                        ))
+                        self.test_tree.tag_configure(f"row{idx}", foreground=self.colors['error'])
+                        self.test_tree.item(item, tags=(f"row{idx}",))
+                    
+                    self.root.after(0, update_error)
                     
                     test_results.append({
                         "test_id": i + 1,
@@ -668,25 +728,35 @@ class ImprovedCompetitorApp:
             self.results[problem_id]["passed"] = all_passed
             self.results[problem_id]["test_results"] = test_results
             
-            # Update status
-            if all_passed:
-                self.status_var.set(f"✓ All tests passed! Great job!")
-                self.update_status_color(self.colors['success'])
-            else:
-                passed_count = sum(1 for t in test_results if t.get("passed", False))
-                self.status_var.set(f"⚠ {passed_count}/{len(test_results)} tests passed")
-                self.update_status_color(self.colors['warning'])
+            # Update status (on main thread)
+            def update_final_status():
+                if all_passed:
+                    self.status_var.set(f"✓ All tests passed! Great job!")
+                    self.update_status_color(self.colors['success'])
+                else:
+                    passed_count = sum(1 for t in test_results if t.get("passed", False))
+                    self.status_var.set(f"⚠ {passed_count}/{len(test_results)} tests passed")
+                    self.update_status_color(self.colors['warning'])
+                
+                self.update_problem_status()
+                self.run_btn.config(state=tk.NORMAL)
+                self.submit_btn.config(state=tk.NORMAL)
             
-            self.update_problem_status()
+            self.root.after(0, update_final_status)
         
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to run tests:\n{str(e)}")
-            self.status_var.set("✗ Error running tests")
-            self.update_status_color(self.colors['error'])
+            error_msg = str(e)
+            def show_error():
+                messagebox.showerror("Error", f"Failed to run tests:\n{error_msg}")
+                self.status_var.set("✗ Error running tests")
+                self.update_status_color(self.colors['error'])
+                self.run_btn.config(state=tk.NORMAL)
+                self.submit_btn.config(state=tk.NORMAL)
+            
+            self.root.after(0, show_error)
         
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            self.run_btn.config(state=tk.NORMAL)
     
     def submit_solution(self):
         """Submit the current solution"""
