@@ -1,4 +1,5 @@
 # Firebase Credentials (NEVER commit these!)
+firebase_credentials.json
 
 # Python
 __pycache__/
