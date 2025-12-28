@@ -1,6 +1,10 @@
 # Firebase Credentials (NEVER commit these!)
 firebase_credentials.json
 
+# Streamlit Secrets (NEVER commit these!)
+.streamlit/secrets.toml
+secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]
