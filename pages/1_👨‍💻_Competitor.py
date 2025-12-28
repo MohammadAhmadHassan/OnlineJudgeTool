@@ -177,37 +177,64 @@ def run_code_with_tests(code, test_cases):
             # Create execution context
             exec_globals = {}
             
+            # Mock input() function for entry-level programmers
+            # Split test input into lines for multiple input() calls
+            input_lines = str(test['input']).strip().split('\n')
+            input_index = [0]  # Use list to allow modification in nested function
+            
+            def mock_input(prompt=''):
+                """Mock input function that returns test case inputs"""
+                if input_index[0] < len(input_lines):
+                    value = input_lines[input_index[0]]
+                    input_index[0] += 1
+                    return value
+                return ''  # Return empty string if no more inputs
+            
+            # Add mock input to execution environment
+            exec_globals['input'] = mock_input
+            
             # Execute the code
             with contextlib.redirect_stdout(stdout_capture):
                 exec(code, exec_globals)
             
-            # Get the solution function (assume it's named 'solution')
-            if 'solution' not in exec_globals:
+            # Get printed output
+            printed_output = stdout_capture.getvalue().strip()
+            
+            # Check if solution function exists
+            if 'solution' in exec_globals:
+                # Function-based solution
+                solution_func = exec_globals['solution']
+                
+                # Parse input - keep as string for most problems
+                input_val = test['input']
+                
+                # Run the function
+                if isinstance(input_val, list):
+                    # Multiple arguments
+                    output = solution_func(*input_val)
+                else:
+                    # Single argument
+                    output = solution_func(input_val)
+                
+                # Convert to string for comparison
+                output = str(output).strip()
+                
+            elif printed_output:
+                # Code uses print() instead of return (common for beginners)
+                output = printed_output
+            else:
                 results.append({
                     'test_num': i + 1,
                     'passed': False,
                     'input': test['input'],
                     'expected': test['output'],
-                    'output': 'Error: No function named "solution" found',
-                    'error': 'Function not found'
+                    'output': 'Error: No output produced (no solution function or print statements)',
+                    'error': 'No output'
                 })
                 continue
             
-            solution_func = exec_globals['solution']
-            
-            # Parse input - keep as string for most problems
-            input_val = test['input']
-            
-            # Run the function
-            if isinstance(input_val, list):
-                # Multiple arguments
-                output = solution_func(*input_val)
-            else:
-                # Single argument
-                output = solution_func(input_val)
-            
             # Get expected output
-            expected = test['output']
+            expected = str(test['output']).strip()
             
             # Compare output (handle both exact match and string comparison)
             passed = (output == expected) or (str(output).strip() == str(expected).strip())
@@ -216,8 +243,8 @@ def run_code_with_tests(code, test_cases):
                 'test_num': i + 1,
                 'passed': passed,
                 'input': str(test['input']),
-                'expected': str(expected),
-                'output': str(output),
+                'expected': expected,
+                'output': output,
                 'error': None
             })
             
@@ -432,11 +459,36 @@ else:
             st.markdown(f"**Difficulty:** {problem.get('difficulty', 'Medium')}")
             st.markdown(problem.get('description', 'No description available'))
             
+            # Show input/output format if available
+            if 'input_format' in problem:
+                st.markdown(f"**Input Format:** {problem['input_format']}")
+            if 'output_format' in problem:
+                st.markdown(f"**Output Format:** {problem['output_format']}")
+            
             # Show examples
             if 'examples' in problem:
                 st.markdown("**Examples:**")
                 for i, example in enumerate(problem['examples'], 1):
                     st.code(f"Input: {example.get('input', '')}\nOutput: {example.get('output', '')}")
+        
+        # Show test cases BEFORE running
+        with st.expander("🧪 Test Cases", expanded=False):
+            st.markdown("**Your solution will be tested against these cases:**")
+            test_cases = problem.get('test_cases', [])
+            
+            if test_cases:
+                for i, test in enumerate(test_cases, 1):
+                    st.markdown(f"**Test Case {i}:**")
+                    col_input, col_output = st.columns(2)
+                    with col_input:
+                        st.markdown("**Input:**")
+                        st.code(test.get('input', ''), language="text")
+                    with col_output:
+                        st.markdown("**Expected Output:**")
+                        st.code(test.get('output', ''), language="text")
+                    st.markdown("---")
+            else:
+                st.info("No test cases available for this problem")
         
         # Code editor and testing
         col1, col2 = st.columns([3, 2])
