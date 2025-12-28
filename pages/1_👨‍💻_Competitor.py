@@ -472,7 +472,7 @@ else:
                     st.code(f"Input: {example.get('input', '')}\nOutput: {example.get('output', '')}")
         
         # Show test cases BEFORE running
-        with st.expander("🧪 Test Cases", expanded=False):
+        with st.expander("🧪 Test Cases", expanded=True):
             st.markdown("**Your solution will be tested against these cases:**")
             test_cases = problem.get('test_cases', [])
             
