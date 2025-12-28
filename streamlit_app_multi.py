@@ -9,8 +9,26 @@ Set environment variable DASHBOARD_MODE to control which dashboard to show:
 import streamlit as st
 import os
 
-# Get dashboard mode from environment variable
-DASHBOARD_MODE = os.environ.get('DASHBOARD_MODE', 'all').lower()
+# Get dashboard mode from environment variable or secrets (for Streamlit Cloud)
+DASHBOARD_MODE = os.environ.get('DASHBOARD_MODE', None)
+
+# If not in environment, try Streamlit secrets
+if DASHBOARD_MODE is None:
+    try:
+        DASHBOARD_MODE = st.secrets.get('DASHBOARD_MODE', 'all')
+    except:
+        DASHBOARD_MODE = 'all'
+
+DASHBOARD_MODE = DASHBOARD_MODE.lower()
+
+# CSS to hide sidebar navigation (for single-dashboard deployments)
+HIDE_SIDEBAR_CSS = """
+<style>
+    [data-testid="stSidebarNav"] {
+        display: none;
+    }
+</style>
+"""
 
 # Configure page based on mode
 if DASHBOARD_MODE == 'competitor':
@@ -19,6 +37,9 @@ if DASHBOARD_MODE == 'competitor':
         page_icon="👨‍💻",
         layout="wide"
     )
+    
+    # Hide sidebar navigation
+    st.markdown(HIDE_SIDEBAR_CSS, unsafe_allow_html=True)
     
     st.markdown('<h1 style="text-align: center;">👨‍💻 Competitor Interface</h1>', unsafe_allow_html=True)
     st.markdown("---")
@@ -33,6 +54,9 @@ elif DASHBOARD_MODE == 'judge':
         layout="wide"
     )
     
+    # Hide sidebar navigation
+    st.markdown(HIDE_SIDEBAR_CSS, unsafe_allow_html=True)
+    
     st.markdown('<h1 style="text-align: center;">👨‍⚖️ Judge Dashboard</h1>', unsafe_allow_html=True)
     st.markdown("---")
     
@@ -45,6 +69,9 @@ elif DASHBOARD_MODE == 'spectator':
         page_icon="📊",
         layout="wide"
     )
+    
+    # Hide sidebar navigation
+    st.markdown(HIDE_SIDEBAR_CSS, unsafe_allow_html=True)
     
     st.markdown('<h1 style="text-align: center;">📊 Live Leaderboard</h1>', unsafe_allow_html=True)
     st.markdown("---")

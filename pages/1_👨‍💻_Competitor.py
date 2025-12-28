@@ -15,6 +15,24 @@ import contextlib
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_manager import create_data_manager
 
+# Check if running in single-dashboard mode and hide sidebar navigation
+DASHBOARD_MODE = os.environ.get('DASHBOARD_MODE', None)
+if DASHBOARD_MODE is None:
+    try:
+        DASHBOARD_MODE = st.secrets.get('DASHBOARD_MODE', 'all')
+    except:
+        DASHBOARD_MODE = 'all'
+
+# Hide sidebar navigation if in competitor-only mode
+if DASHBOARD_MODE and DASHBOARD_MODE.lower() == 'competitor':
+    st.markdown("""
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
 # Page configuration
 st.set_page_config(
     page_title="Competitor Interface",

@@ -24,18 +24,26 @@ This guide explains how to deploy each dashboard (Competitor, Judge, Spectator) 
 3. Repository: Your competition repo
 4. Branch: main
 5. **Main file path**: `streamlit_app_multi.py`
-6. **Advanced settings** → Environment variables:
-   - Add variable: `DASHBOARD_MODE` = `competitor`
+6. **Advanced settings**:
+   - **Secrets** → Add your Firebase credentials (see Firebase Configuration section below)
+   - **Environment variables** (NOT Secrets!):
+     - Key: `DASHBOARD_MODE`
+     - Value: `competitor`
 7. App URL: Choose something like `competition-competitor`
 8. Click "Deploy"
+
+**Important:** `DASHBOARD_MODE` must be set in **App settings → Environment variables**, NOT in Secrets!
 
 #### Deploy Judge App
 1. Click "New app" again
 2. Same repository
 3. Branch: main
 4. **Main file path**: `streamlit_app_multi.py`
-5. **Advanced settings** → Environment variables:
-   - Add variable: `DASHBOARD_MODE` = `judge`
+5. **Advanced settings**:
+   - **Secrets** → Add your Firebase credentials
+   - **Environment variables**:
+     - Key: `DASHBOARD_MODE`
+     - Value: `judge`
 6. App URL: Choose something like `competition-judge`
 7. Click "Deploy"
 
@@ -44,8 +52,11 @@ This guide explains how to deploy each dashboard (Competitor, Judge, Spectator) 
 2. Same repository
 3. Branch: main
 4. **Main file path**: `streamlit_app_multi.py`
-5. **Advanced settings** → Environment variables:
-   - Add variable: `DASHBOARD_MODE` = `spectator`
+5. **Advanced settings**:
+   - **Secrets** → Add your Firebase credentials
+   - **Environment variables**:
+     - Key: `DASHBOARD_MODE`
+     - Value: `spectator`
 6. App URL: Choose something like `competition-spectator`
 7. Click "Deploy"
 
