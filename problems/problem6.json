@@ -1,19 +1,19 @@
 {
-    "title": "Correct Gender Input",
-    "description": "Ask for gender until the user writes 'male' or 'female'.",
-    "input_format": "One word per line (simulate input until valid).",
+    "title": "Positive or Negative",
+    "description": "Ask the user for a number. Print 'Positive' if it\u2019s greater than 0, 'Negative' if less than 0, and 'Zero' if equal to 0.",
+    "input_format": "One integer number.",
     "test_cases": [
         {
-            "input": "boy\nman\nmale",
-            "output": "Hello Mr."
+            "input": "5",
+            "output": "Positive"
         },
         {
-            "input": "girl\nfemale",
-            "output": "Hello Ms."
+            "input": "-3",
+            "output": "Negative"
         },
         {
-            "input": "robot\ndog\nfemale",
-            "output": "Hello Ms."
+            "input": "0",
+            "output": "Zero"
         }
     ]
 }

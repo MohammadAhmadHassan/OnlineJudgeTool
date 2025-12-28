@@ -1,0 +1,15 @@
+{
+    "title": "Animal Name Check",
+    "description": "Check if the animal name starts with 'c' and ends with 't'. Stop when 'stop' is entered.",
+    "input_format": "Multiple animal names, one per line. End with 'stop'.",
+    "test_cases": [
+        {
+            "input": "dog\ncat\nstop",
+            "output": "Interesting!\nThat\u2019s a cat-like name!"
+        },
+        {
+            "input": "cheetah\ncivet\nstop",
+            "output": "Interesting!\nThat\u2019s a cat-like name!"
+        }
+    ]
+}

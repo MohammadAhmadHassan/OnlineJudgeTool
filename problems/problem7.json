@@ -1,19 +1,19 @@
 {
-    "title": "Name Tag Generator",
-    "description": "Get first and last name and print them combined.",
-    "input_format": "Two words, each on a separate line.",
+    "title": "Compare Ages",
+    "description": "Ask for your age and your friend's age. Print 'You are older!' if yours is greater, 'Your friend is older!' if theirs is greater, or 'Same age!' if equal.",
+    "input_format": "Two integers on separate lines.",
     "test_cases": [
         {
-            "input": "Sara\nLane",
-            "output": "Hello Sara Lane!"
+            "input": "15\n10",
+            "output": "You are older!"
         },
         {
-            "input": "Tom\nJerry",
-            "output": "Hello Tom Jerry!"
+            "input": "10\n15",
+            "output": "Your friend is older!"
         },
         {
-            "input": "Anna\nSmith",
-            "output": "Hello Anna Smith!"
+            "input": "12\n12",
+            "output": "Same age!"
         }
     ]
 }

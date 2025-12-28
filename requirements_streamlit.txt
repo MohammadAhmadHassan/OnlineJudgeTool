@@ -1,0 +1,9 @@
+# Streamlit Web Application Requirements
+streamlit>=1.28.0
+pandas>=2.0.0
+plotly>=5.17.0
+
+# Existing requirements (Firebase backend)
+firebase-admin>=6.2.0
+Pillow>=10.0.0
+grpcio>=1.59.0

@@ -1,19 +1,19 @@
 {
-    "title": "Get First 3 Letters",
-    "description": "Ask for a name and print the first 3 letters using slicing.",
-    "input_format": "One word per line.",
+    "title": "Name Repeater",
+    "description": "Ask for the user's name and a number. Use a while loop to print their name that many times.",
+    "input_format": "Two lines: name and integer.",
     "test_cases": [
         {
-            "input": "Jonathan",
-            "output": "Jon"
+            "input": "Ali\n3",
+            "output": "Ali\nAli\nAli"
         },
         {
-            "input": "Lily",
-            "output": "Lil"
+            "input": "Sara\n1",
+            "output": "Sara"
         },
         {
-            "input": "Tom",
-            "output": "Tom"
+            "input": "Tom\n0",
+            "output": ""
         }
     ]
 }

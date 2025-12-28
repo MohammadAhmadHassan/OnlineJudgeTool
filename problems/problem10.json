@@ -1,19 +1,19 @@
 {
-    "title": "Ends with Y Checker",
-    "description": "Keep asking for a name. If it ends with 'y', print a message. Stop when user types 'done'.",
-    "input_format": "Multiple names on new lines, ending with 'done'.",
+    "title": "Slice the Word",
+    "description": "Ask for a word and print the first three letters using slicing. If the word has fewer than three letters, print the whole word.",
+    "input_format": "One word.",
     "test_cases": [
         {
-            "input": "Alex\nLily\ndone",
-            "output": "Nice name!\nThat sounds like a birthday name!"
+            "input": "hello",
+            "output": "hel"
         },
         {
-            "input": "Tommy\nDanny\ndone",
-            "output": "That sounds like a birthday name!\nThat sounds like a birthday name!"
+            "input": "hi",
+            "output": "hi"
         },
         {
-            "input": "Max\nBen\ndone",
-            "output": "Nice name!\nNice name!"
+            "input": "Python",
+            "output": "Pyt"
         }
     ]
 }

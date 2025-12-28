@@ -1,0 +1,19 @@
+{
+    "title": "Ends with Y Checker",
+    "description": "Keep asking for a name. If it ends with 'y', print a message. Stop when user types 'done'.",
+    "input_format": "Multiple names on new lines, ending with 'done'.",
+    "test_cases": [
+        {
+            "input": "Alex\nLily\ndone",
+            "output": "Nice name!\nThat sounds like a birthday name!"
+        },
+        {
+            "input": "Tommy\nDanny\ndone",
+            "output": "That sounds like a birthday name!\nThat sounds like a birthday name!"
+        },
+        {
+            "input": "Max\nBen\ndone",
+            "output": "Nice name!\nNice name!"
+        }
+    ]
+}

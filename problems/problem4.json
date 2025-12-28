@@ -1,11 +1,19 @@
-
 {
-    "title": "Middle Letter",
-    "description": "Ask for a word and print the middle letter (assume odd length).",
-    "input_format": "One word per line.",
+    "title": "Add Two Numbers",
+    "description": "Ask the user for two numbers and print their sum.",
+    "input_format": "Two integers, each on a separate line.",
     "test_cases": [
-      {"input": "cat", "output": "a"},
-      {"input": "apple", "output": "p"},
-      {"input": "hello", "output": "l"}
+        {
+            "input": "2\n3",
+            "output": "5"
+        },
+        {
+            "input": "0\n5",
+            "output": "5"
+        },
+        {
+            "input": "-2\n4",
+            "output": "2"
+        }
     ]
-  }
+}

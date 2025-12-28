@@ -2,130 +2,157 @@
 Build Competitor Interface Executable
 Creates a distributable folder with the executable
 """
+import PyInstaller.__main__
 import os
-import subprocess
+import shutil
 import sys
+from datetime import datetime
 
-# Get paths
-current_dir = os.path.dirname(os.path.abspath(__file__))
-venv_python = os.path.join(current_dir, ".venv", "Scripts", "python.exe")
-pyinstaller = os.path.join(current_dir, ".venv", "Scripts", "pyinstaller.exe")
-
-print("=" * 70)
+print("=" * 60)
 print("Building Competitor Interface Executable")
-print("=" * 70)
+print("=" * 60)
 
-# Create launcher script
-launcher_content = """# -*- coding: utf-8 -*-
-import sys
-import os
-import traceback
-
-# Force UTF-8 encoding for stdout/stderr to prevent Unicode errors on Windows
-if sys.platform == 'win32':
-    import io
-    # In windowed mode, stdout/stderr might be None, so check first
-    if sys.stdout is not None and hasattr(sys.stdout, 'buffer'):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    if sys.stderr is not None and hasattr(sys.stderr, 'buffer'):
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-    os.environ['PYTHONIOENCODING'] = 'utf-8'
-
-import tkinter as tk
-from tkinter import messagebox
+# Clean previous builds
+try:
+    if os.path.exists('build'):
+        shutil.rmtree('build')
+except Exception as e:
+    print(f"Warning: Could not clean 'build' folder: {e}")
 
 try:
-    from competitor_interface import ImprovedCompetitorApp
-    from data_manager import create_data_manager
-    
-    if __name__ == "__main__":
-        root = tk.Tk()
-        root.withdraw()  # Hide root window initially
-        
-        try:
-            data_manager = create_data_manager()
-            app = ImprovedCompetitorApp(root, data_manager)
-            root.deiconify()  # Show window after successful initialization
-            root.mainloop()
-        except Exception as e:
-            error_msg = f"Failed to start application:\\n\\n{str(e)}\\n\\nPlease contact support."
-            messagebox.showerror("Startup Error", error_msg)
-            sys.exit(1)
-            
+    if os.path.exists('dist/CompetitorInterface'):
+        shutil.rmtree('dist/CompetitorInterface')
 except Exception as e:
-    # Critical error before GUI starts
-    import tkinter as tk
-    from tkinter import messagebox
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror("Critical Error", f"Failed to load application:\\n\\n{str(e)}")
-    sys.exit(1)
-"""
+    print(f"Warning: Could not clean 'dist/CompetitorInterface' folder: {e}")
+    print("This is OK - PyInstaller will overwrite files.")
 
-launcher_path = os.path.join(current_dir, "competitor_launcher.py")
-with open(launcher_path, "w") as f:
-    f.write(launcher_content)
-
-print("\n✓ Created launcher script")
-
-# Build PyInstaller command
-cmd = [
-    pyinstaller,
-    "--name=CompetitorInterface",
-    "--windowed",  # No console window
-    "--noconfirm",  # Overwrite existing files
-    f"--add-data=problems{os.pathsep}problems",
+# All Firebase-related hidden imports
+hidden_imports = [
+    'firebase_admin',
+    'firebase_admin.credentials',
+    'firebase_admin.firestore',
+    'firebase_admin.db',
+    'firebase_admin._sseclient',
+    'firebase_admin._http_client',
+    'google.cloud',
+    'google.cloud.firestore',
+    'google.cloud.firestore_v1',
+    'google.auth',
+    'google.auth.transport',
+    'grpc',
+    'google.api_core',
 ]
 
-# Add Firebase credentials if they exist
-firebase_creds = os.path.join(current_dir, "firebase_credentials.json")
-if os.path.exists(firebase_creds):
-    cmd.append(f"--add-data=firebase_credentials.json{os.pathsep}.")
-    print("✓ Including Firebase credentials")
+# Build hidden import arguments
+hidden_import_args = []
+for module in hidden_imports:
+    hidden_import_args.extend(['--hidden-import', module])
 
-# Add hidden imports for Firebase
-cmd.extend([
-    "--hidden-import=firebase_admin",
-    "--hidden-import=google.cloud.firestore",
-    "--collect-all=firebase_admin",
-    "--collect-all=google.cloud.firestore",
-])
+# Get Python DLL path
+python_dll = None
+if sys.platform == 'win32':
+    python_version = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+    python_base = os.path.dirname(sys.executable)
+    
+    # Check common locations
+    dll_locations = [
+        os.path.join(python_base, python_version),
+        os.path.join(os.path.dirname(python_base), python_version),
+        os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'System32', python_version),
+    ]
+    
+    for loc in dll_locations:
+        if os.path.exists(loc):
+            python_dll = loc
+            print(f"Found Python DLL: {python_dll}")
+            break
 
-cmd.append(launcher_path)
+# PyInstaller command
+pyinstaller_args = [
+    'competitor_interface.py',
+    '--name=CompetitorInterface',
+    '--windowed',
+    '--icon=NONE',
+    '--add-data=problems;problems',
+    '--add-data=firebase_credentials.json;.',
+    '--clean',
+    '--noconfirm',
+    '--noupx',  # Disable UPX compression (can cause DLL issues)
+    '--onedir',  # Create a directory (more reliable than onefile)
+] + hidden_import_args
 
-print("\n Building executable (this may take 2-3 minutes)...")
-print("  - Including Python interpreter")
-print("  - Including all dependencies")
-print("  - Including Firebase support\n")
+# Add Python DLL explicitly if found
+if python_dll:
+    pyinstaller_args.extend(['--add-binary', f'{python_dll};.'])
 
-try:
-    # Run PyInstaller
-    result = subprocess.run(cmd, check=True)
+print("\nRunning PyInstaller with arguments:")
+for arg in pyinstaller_args:
+    print(f"  {arg}")
+print()
+
+PyInstaller.__main__.run(pyinstaller_args)
+
+# Copy additional files
+dist_dir = 'dist/CompetitorInterface'
+if os.path.exists(dist_dir):
+    # Copy README
+    readme_content = """# Competition Problem Solving Tool - Competitor Interface
+
+## Quick Start
+
+1. Double-click `CompetitorInterface.exe` to launch
+2. Enter your name to register
+3. Start solving problems!
+
+## Features
+
+- Select and solve programming problems
+- Write and test your code in real-time
+- Submit solutions when all tests pass
+- Multi-device support with Firebase sync
+
+## System Requirements
+
+- Windows 10/11
+- No Python installation required
+- Internet connection for Firebase sync
+
+## Important Notes
+
+- Keep all files in this folder together
+- Do not move the .exe file separately
+- Make sure firebase_credentials.json is present
+
+## Troubleshooting
+
+If you encounter "Python DLL not found":
+1. Make sure you're running the .exe from this folder
+2. Check that all _internal files are present
+3. Try running as Administrator
+
+If you encounter other issues:
+1. Check your internet connection
+2. Verify firebase_credentials.json exists
+3. Contact the competition organizers
+
+Build Date: """ + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + f"""
+Python Version: {sys.version}
+"""
+
+    with open(os.path.join(dist_dir, 'README.txt'), 'w', encoding='utf-8') as f:
+        f.write(readme_content)
     
-    print("\n" + "=" * 70)
-    print("✓ BUILD SUCCESSFUL!")
-    print("=" * 70)
-    
-    dist_folder = os.path.join(current_dir, "dist", "CompetitorInterface")
-    exe_path = os.path.join(dist_folder, "CompetitorInterface.exe")
-    
-    print(f"\nExecutable location:")
-    print(f"  {exe_path}")
-    print(f"\nTo distribute:")
-    print(f"  1. Copy the entire 'dist/CompetitorInterface' folder")
-    print(f"  2. Share it with students")
-    print(f"  3. They can run CompetitorInterface.exe directly")
-    print(f"\n✓ No Python installation required on student laptops!")
-    print(f"✓ All dependencies included!")
-    print(f"✓ Firebase support included!")
-    
-    # Clean up
-    if os.path.exists(launcher_path):
-        os.remove(launcher_path)
-        
-except subprocess.CalledProcessError as e:
-    print(f"\n✗ Build failed with error code {e.returncode}")
-    sys.exit(1)
-except Exception as e:
-    print(f"\n✗ Build failed: {e}")
-    sys.exit(1)
+    exe_path = os.path.join(dist_dir, 'CompetitorInterface.exe')
+    if os.path.exists(exe_path):
+        print("\n" + "=" * 60)
+        print(f"✓ Build complete!")
+        print(f"✓ Executable: {exe_path}")
+        print(f"✓ Size: {os.path.getsize(exe_path) / (1024*1024):.2f} MB")
+        print(f"✓ Total folder size: ~{sum(os.path.getsize(os.path.join(dirpath, filename)) for dirpath, dirnames, filenames in os.walk(dist_dir) for filename in filenames) / (1024*1024):.2f} MB")
+        print("\n⚠ IMPORTANT: Distribute the ENTIRE 'CompetitorInterface' folder!")
+        print("  Do not copy just the .exe file - it needs the _internal folder!")
+        print("=" * 60)
+    else:
+        print("\n❌ Build failed! Executable not found.")
+else:
+    print("\n❌ Build failed! Check the output above for errors.")

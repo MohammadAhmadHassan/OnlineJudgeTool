@@ -1,19 +1,19 @@
 {
-    "title": "Counting Up",
-    "description": "Ask for a number, then count from 1 to that number using a while loop.",
-    "input_format": "One number per line.",
+    "title": "Countdown Loop",
+    "description": "Ask for a number and use a while loop to count down to 1, printing each number.",
+    "input_format": "One integer number.",
     "test_cases": [
         {
             "input": "3",
-            "output": "1\n2\n3"
+            "output": "3\n2\n1"
         },
         {
             "input": "1",
             "output": "1"
         },
         {
-            "input": "5",
-            "output": "1\n2\n3\n4\n5"
+            "input": "0",
+            "output": ""
         }
     ]
 }

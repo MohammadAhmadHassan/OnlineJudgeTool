@@ -1,0 +1,23 @@
+{
+    "title": "Time Greeting with Validation",
+    "description": "Ask the user for the current hour (0\u201323) and greet accordingly. If invalid, show a warning.",
+    "input_format": "One number per line.",
+    "test_cases": [
+        {
+            "input": "10",
+            "output": "Good morning!"
+        },
+        {
+            "input": "15",
+            "output": "Good afternoon!"
+        },
+        {
+            "input": "20",
+            "output": "Good evening!"
+        },
+        {
+            "input": "25",
+            "output": "Invalid hour"
+        }
+    ]
+}

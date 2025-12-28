@@ -1,21 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
-
-datas = [('problems', 'problems'), ('firebase_credentials.json', '.')]
-binaries = []
-hiddenimports = ['firebase_admin', 'google.cloud.firestore']
-tmp_ret = collect_all('firebase_admin')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('google.cloud.firestore')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['C:\\Users\\VOIS\\Downloads\\problemSolvingTool\\competitor_launcher.py'],
+    ['competitor_interface.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[('C:\\Users\\VOIS\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.dll', '.')],
+    datas=[('problems', 'problems'), ('firebase_credentials.json', '.')],
+    hiddenimports=['firebase_admin', 'firebase_admin.credentials', 'firebase_admin.firestore', 'firebase_admin.db', 'firebase_admin._sseclient', 'firebase_admin._http_client', 'google.cloud', 'google.cloud.firestore', 'google.cloud.firestore_v1', 'google.auth', 'google.auth.transport', 'grpc', 'google.api_core'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -34,20 +25,21 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='NONE',
 )
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='CompetitorInterface',
 )

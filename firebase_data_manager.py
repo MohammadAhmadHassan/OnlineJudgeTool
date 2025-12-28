@@ -142,10 +142,12 @@ class FirebaseDataManager:
             
             submission = {
                 'code': code,
+                'timestamp': datetime.now().isoformat(),
                 'submitted_at': datetime.now().isoformat(),
                 'test_results': test_results,
                 'all_passed': all_passed,
                 'total_tests': len(test_results),
+                'tests_passed': sum(1 for t in test_results if t.get('passed', False)),
                 'passed_tests': sum(1 for t in test_results if t.get('passed', False))
             }
             
@@ -156,7 +158,9 @@ class FirebaseDataManager:
             if problem_key not in problems:
                 problems[problem_key] = {
                     'submissions': [],
-                    'best_result': None
+                    'best_result': None,
+                    'judge_approval': 'pending',  # Initialize approval status
+                    'judge_approval_time': None
                 }
             
             # Add submission
@@ -315,42 +319,69 @@ class FirebaseDataManager:
         """Set judge approval status for a problem (approved/rejected)"""
         try:
             problem_id_str = str(problem_id)
+            print(f"[DEBUG] Setting judge approval: name={name}, problem_id={problem_id} (str: {problem_id_str}), status={status}")
+            
             doc_ref = self.competitors_ref.document(name)
             
             # Get current data and update it
             doc = doc_ref.get()
             if not doc.exists:
                 print(f"[ERROR] Competitor {name} not found in database")
-                return
+                return False
             
             data = doc.to_dict()
             problems = data.get('problems', {})
             
+            print(f"[DEBUG] Available problems for {name}: {list(problems.keys())}")
+            
             if problem_id_str not in problems:
-                print(f"[WARNING] Problem {problem_id} not found for {name}. Available problems: {list(problems.keys())}")
-                return
+                print(f"[WARNING] Problem {problem_id_str} not found for {name}. Available problems: {list(problems.keys())}")
+                return False
             
-            # Modify the problems dictionary directly
-            problems[problem_id_str]['judge_approval'] = status
-            problems[problem_id_str]['judge_approval_time'] = datetime.now().isoformat()
+            print(f"[DEBUG] Current problem data: {problems.get(problem_id_str, {}).keys()}")
             
-            # Update the entire problems field
-            doc_ref.update({
-                'problems': problems
-            })
+            # Check if judge_approval field exists, if not we need to create it first
+            current_approval = problems.get(problem_id_str, {}).get('judge_approval')
+            if current_approval is None:
+                print(f"[INFO] judge_approval field doesn't exist, creating it...")
             
-            print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
-            print(f"[DEBUG] Updated problems field in Firestore")
+            # Update using Firestore field path notation for nested updates
+            # This ensures the update is properly written to Firestore
+            update_dict = {
+                f'problems.{problem_id_str}.judge_approval': status,
+                f'problems.{problem_id_str}.judge_approval_time': datetime.now().isoformat()
+            }
+            
+            print(f"[DEBUG] Attempting to update with: {update_dict}")
+            
+            # Perform the update
+            doc_ref.update(update_dict)
+            
+            print(f"[OK] Firestore update completed for {name} - Problem {problem_id}")
             
             # Verify the update by reading back
+            import time
+            time.sleep(0.5)  # Small delay to ensure Firestore has processed the update
+            
             verify_doc = doc_ref.get()
             if verify_doc.exists:
                 verify_data = verify_doc.to_dict()
                 verify_status = verify_data.get('problems', {}).get(problem_id_str, {}).get('judge_approval')
                 print(f"[VERIFY] Read back judge_approval status: {verify_status}")
+                if verify_status == status:
+                    print(f"[SUCCESS] Verification passed! Status is now {verify_status}")
+                    return True
+                else:
+                    print(f"[ERROR] Verification failed! Expected {status}, got {verify_status}")
+                    print(f"[DEBUG] Full problem data after update: {verify_data.get('problems', {}).get(problem_id_str, {})}")
+                    return False
+            return True
         except Exception as e:
-            print(f"Error setting judge approval: {e}")
-            raise
+            print(f"[ERROR] Exception in set_judge_approval: {e}")
+            print(f"[ERROR] Exception type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            return False
     
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""
@@ -372,3 +403,35 @@ class FirebaseDataManager:
         except Exception as e:
             print(f"Error adding listener: {e}")
             return None
+    
+    def fix_missing_judge_approval_fields(self):
+        """
+        Utility function to add judge_approval field to all existing problems
+        that don't have it. Run this once to fix existing data.
+        """
+        try:
+            print("[INFO] Scanning for problems missing judge_approval field...")
+            competitors = self.get_all_competitors()
+            fixed_count = 0
+            
+            for name, comp_data in competitors.items():
+                problems = comp_data.get('problems', {})
+                doc_ref = self.competitors_ref.document(name)
+                
+                for problem_id, problem_data in problems.items():
+                    if 'judge_approval' not in problem_data:
+                        print(f"[FIX] Adding judge_approval to {name} - Problem {problem_id}")
+                        # Add the missing field
+                        doc_ref.update({
+                            f'problems.{problem_id}.judge_approval': 'pending',
+                            f'problems.{problem_id}.judge_approval_time': None
+                        })
+                        fixed_count += 1
+            
+            print(f"[SUCCESS] Fixed {fixed_count} problems with missing judge_approval fields")
+            return fixed_count
+        except Exception as e:
+            print(f"[ERROR] Failed to fix missing fields: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0

@@ -1,0 +1,11 @@
+
+ {
+    "title": "Age Category",
+    "description": "Ask the user to enter their age and print 'Child', 'Teen', or 'Adult'.",
+    "input_format": "One number per line.",
+    "test_cases": [
+      {"input": "9", "output": "Child"},
+      {"input": "15", "output": "Teen"},
+      {"input": "21", "output": "Adult"}
+    ]
+  }

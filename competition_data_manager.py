@@ -199,24 +199,39 @@ class CompetitionDataManager:
     
     def set_judge_approval(self, name: str, problem_id: int, status: str):
         """Set judge approval status for a problem (approved/rejected)"""
-        data = self.load_data()
-        
-        if name in data["competitors"]:
+        try:
+            data = self.load_data()
+            
+            if name not in data["competitors"]:
+                print(f"[ERROR] Competitor {name} not found")
+                return False
+            
             problem_id_str = str(problem_id)
             if "problems" not in data["competitors"][name]:
                 data["competitors"][name]["problems"] = {}
             
             # Check if problem has been submitted
             if problem_id_str not in data["competitors"][name]["problems"]:
-                print(f"[WARNING] Problem {problem_id} not found for {name}. Creating entry anyway.")
-                data["competitors"][name]["problems"][problem_id_str] = {}
+                print(f"[WARNING] Problem {problem_id_str} not found for {name}. Available: {list(data['competitors'][name]['problems'].keys())}")
+                return False
             
             data["competitors"][name]["problems"][problem_id_str]["judge_approval"] = status
             data["competitors"][name]["problems"][problem_id_str]["judge_approval_time"] = datetime.now().isoformat()
             
             self.save_data(data)
             print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
-            print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
+            
+            # Verify
+            verify_data = self.load_data()
+            verify_status = verify_data["competitors"][name]["problems"][problem_id_str].get("judge_approval")
+            print(f"[VERIFY] Judge approval status is now: {verify_status}")
+            
+            return verify_status == status
+        except Exception as e:
+            print(f"[ERROR] Failed to set judge approval: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""

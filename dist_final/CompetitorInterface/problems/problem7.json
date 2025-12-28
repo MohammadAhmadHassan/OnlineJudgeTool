@@ -1,0 +1,19 @@
+{
+    "title": "Name Tag Generator",
+    "description": "Get first and last name and print them combined.",
+    "input_format": "Two words, each on a separate line.",
+    "test_cases": [
+        {
+            "input": "Sara\nLane",
+            "output": "Hello Sara Lane!"
+        },
+        {
+            "input": "Tom\nJerry",
+            "output": "Hello Tom Jerry!"
+        },
+        {
+            "input": "Anna\nSmith",
+            "output": "Hello Anna Smith!"
+        }
+    ]
+}

@@ -1,0 +1,15 @@
+{
+    "title": "Custom Greeting with Gender",
+    "description": "Ask for name and gender. Greet as Mr. or Ms. based on input.",
+    "input_format": "First name, last name, and gender on separate lines.",
+    "test_cases": [
+        {
+            "input": "Sara\nLane\nfemale",
+            "output": "Hello Ms. Sara Lane"
+        },
+        {
+            "input": "Tom\nJerry\nmale",
+            "output": "Hello Mr. Tom Jerry"
+        }
+    ]
+}

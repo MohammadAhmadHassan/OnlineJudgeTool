@@ -1,0 +1,19 @@
+{
+    "title": "Teen Check",
+    "description": "Check if the user's age is between 13 and 19 (inclusive).",
+    "input_format": "One number per line.",
+    "test_cases": [
+        {
+            "input": "13",
+            "output": "You're a teenager!"
+        },
+        {
+            "input": "19",
+            "output": "You're a teenager!"
+        },
+        {
+            "input": "12",
+            "output": "You're not a teenager."
+        }
+    ]
+}

@@ -1,11 +1,19 @@
-
 {
-    "title": "Name Shouting",
-    "description": "Ask the user for their name and print it in all uppercase followed by 3 exclamation marks.",
-    "input_format": "One word per line.",
+    "title": "Greeting Message",
+    "description": "Ask for the user's name and print a greeting message that includes their name.",
+    "input_format": "One word (the user's name).",
     "test_cases": [
-      {"input": "Ali", "output": "ALI!!!"},
-      {"input": "sara", "output": "SARA!!!"},
-      {"input": "Tom", "output": "TOM!!!"}
+        {
+            "input": "Laila",
+            "output": "Hello Laila!"
+        },
+        {
+            "input": "Tom",
+            "output": "Hello Tom!"
+        },
+        {
+            "input": "sara",
+            "output": "Hello sara!"
+        }
     ]
-  }
+}

@@ -16,7 +16,11 @@ class FirebaseConfig:
     @staticmethod
     def load_credentials() -> Optional[dict]:
         """
-        Load Firebase credentials from JSON file.
+        Load Firebase credentials from JSON file or Streamlit secrets.
+        
+        Priority:
+        1. Streamlit secrets (for cloud deployment)
+        2. Local firebase_credentials.json file
         
         The credentials file should contain your Firebase service account key.
         Download it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key
@@ -35,6 +39,16 @@ class FirebaseConfig:
             "client_x509_cert_url": "..."
         }
         """
+        # Try to load from Streamlit secrets first (for deployment)
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'firebase' in st.secrets:
+                # Convert Streamlit secrets to dict
+                return dict(st.secrets['firebase'])
+        except:
+            pass
+        
+        # Fall back to local file
         if not os.path.exists(FirebaseConfig.CONFIG_FILE):
             return None
         

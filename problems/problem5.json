@@ -1,13 +1,19 @@
-
-  
-  {
-    "title": "Gender and Age Access",
-    "description": "Ask for gender and age. Allow access only if female and exactly 12.",
-    "input_format": "Gender and age, each on a new line.",
+{
+    "title": "Find the Difference",
+    "description": "Ask the user for two numbers and print their difference.",
+    "input_format": "Two integers, each on a separate line.",
     "test_cases": [
-      {"input": "female\n12", "output": "Access granted"},
-      {"input": "male\n12", "output": "Access denied"},
-      {"input": "female\n11", "output": "Access denied"},
-      {"input": "male\n10", "output": "Access denied"}
+        {
+            "input": "5\n2",
+            "output": "3"
+        },
+        {
+            "input": "10\n5",
+            "output": "5"
+        },
+        {
+            "input": "4\n4",
+            "output": "0"
+        }
     ]
-  }
+}

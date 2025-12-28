@@ -1,11 +1,19 @@
-
- {
-    "title": "Age Category",
-    "description": "Ask the user to enter their age and print 'Child', 'Teen', or 'Adult'.",
-    "input_format": "One number per line.",
+{
+    "title": "Lowercase City",
+    "description": "Ask the user for the name of a city and print it in lowercase letters.",
+    "input_format": "One word (the name of a city).",
     "test_cases": [
-      {"input": "9", "output": "Child"},
-      {"input": "15", "output": "Teen"},
-      {"input": "21", "output": "Adult"}
+        {
+            "input": "CAIRO",
+            "output": "cairo"
+        },
+        {
+            "input": "Paris",
+            "output": "paris"
+        },
+        {
+            "input": "LONDON",
+            "output": "london"
+        }
     ]
-  }
+}

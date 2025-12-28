@@ -1,16 +1,19 @@
-
 {
-    "title": "Loop Until Magic Word",
-    "description": "Keep asking the user to enter a word. Stop only when they write 'abracadabra'.",
-    "input_format": "Multiple words, one per line.",
+    "title": "Uppercase Name",
+    "description": "Ask for the user's name and print it in uppercase letters.",
+    "input_format": "One word (the user's name).",
     "test_cases": [
-      {
-        "input": "hello\nopen\nabracadabra",
-        "output": "Wrong word\nWrong word\nMagic word accepted!"
-      },
-      {
-        "input": "please\nno\nabracadabra",
-        "output": "Wrong word\nWrong word\nMagic word accepted!"
-      }
+        {
+            "input": "Ali",
+            "output": "ALI"
+        },
+        {
+            "input": "tom",
+            "output": "TOM"
+        },
+        {
+            "input": "Sam",
+            "output": "SAM"
+        }
     ]
-  }
+}

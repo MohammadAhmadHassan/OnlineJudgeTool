@@ -1,0 +1,11 @@
+
+{
+    "title": "Name Shouting",
+    "description": "Ask the user for their name and print it in all uppercase followed by 3 exclamation marks.",
+    "input_format": "One word per line.",
+    "test_cases": [
+      {"input": "Ali", "output": "ALI!!!"},
+      {"input": "sara", "output": "SARA!!!"},
+      {"input": "Tom", "output": "TOM!!!"}
+    ]
+  }

@@ -1,0 +1,19 @@
+{
+    "title": "Full Name Length",
+    "description": "Check if full name length is long, medium, or short.\n If it's 12 characters or more then it's a 'Long name', but if it's 8 characters or more then it's 'Medium name', otherwise it's 'Short name'",
+    "input_format": "Two words, each on a separate line (first name, last name).",
+    "test_cases": [
+        {
+            "input": "John\nSmith",
+            "output": "Medium name"
+        },
+        {
+            "input": "A\nB",
+            "output": "Short name"
+        },
+        {
+            "input": "Maximilian\nAlexander",
+            "output": "Long name!"
+        }
+    ]
+}
