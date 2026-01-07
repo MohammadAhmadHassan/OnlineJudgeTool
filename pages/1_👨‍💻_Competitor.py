@@ -309,9 +309,12 @@ st.markdown("# 👨‍💻 Competitor Interface")
 
 # Registration/Login Section
 if st.session_state.competitor_name is None:
-    # Get username from URL query parameters (only once)
-    url_username = None
-    if not st.session_state.url_username_processed:
+    # Get username from session state (captured by streamlit_app_multi.py from URL)
+    # or try reading from URL directly as fallback
+    url_username = st.session_state.get('url_username', None)
+    
+    # Fallback: try reading from URL if not in session state
+    if not url_username and not st.session_state.url_username_processed:
         try:
             query_params = st.query_params
             url_username = query_params.get('username', None)
@@ -320,18 +323,13 @@ if st.session_state.competitor_name is None:
             if isinstance(url_username, list) and len(url_username) > 0:
                 url_username = url_username[0]
             
-            # Mark as processed to avoid re-reading on rerun
-            st.session_state.url_username_processed = True
-            
             # Store in session state
             if url_username:
-                st.session_state.temp_username = url_username
+                st.session_state.url_username = url_username
         except Exception as e:
-            st.error(f"Error reading URL parameters: {e}")
-            url_username = None
-    else:
-        # Use stored username from session state
-        url_username = st.session_state.get('temp_username', None)
+            pass
+        
+        st.session_state.url_username_processed = True
     
     st.markdown("## 📝 Registration")
     
@@ -357,6 +355,9 @@ if st.session_state.competitor_name is None:
                 # Register with URL username
                 data_manager.register_competitor(url_username.strip())
                 st.session_state.competitor_name = url_username.strip()
+                # Clear the URL username from session state
+                if 'url_username' in st.session_state:
+                    del st.session_state.url_username
                 st.success(f"Welcome, {url_username}! 🎉")
                 st.rerun()
         

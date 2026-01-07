@@ -21,6 +21,24 @@ if DASHBOARD_MODE is None:
 
 DASHBOARD_MODE = DASHBOARD_MODE.lower()
 
+# Capture URL parameters before page switch (they get lost during st.switch_page)
+if 'url_params_captured' not in st.session_state:
+    try:
+        query_params = st.query_params
+        username = query_params.get('username', None)
+        
+        # Handle list format
+        if isinstance(username, list) and len(username) > 0:
+            username = username[0]
+        
+        # Store in session state for the target page to use
+        if username:
+            st.session_state.url_username = username
+        
+        st.session_state.url_params_captured = True
+    except:
+        st.session_state.url_params_captured = True
+
 # CSS to hide sidebar navigation (for single-dashboard deployments)
 HIDE_SIDEBAR_CSS = """
 <style>
