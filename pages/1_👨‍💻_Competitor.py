@@ -127,35 +127,15 @@ if 'user_level' not in st.session_state:
 
 # Function to load problems
 def load_problems(week=None, level=None):
-    """Load problems filtered by week and level"""
-    problems = {}
-    problems_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'problems')
-    
-    # Determine session based on week (week 1 = session1, week 2 = session2, etc.)
-    session_key = f'session{week}' if week else None
-    
-    if os.path.exists(problems_dir):
-        for filename in os.listdir(problems_dir):
-            if filename.endswith('.json'):
-                try:
-                    with open(os.path.join(problems_dir, filename), 'r') as f:
-                        problem_data = json.load(f)
-                        
-                        # Check if this is a session-based file
-                        if session_key and session_key in problem_data:
-                            # Load problems from the specific session
-                            session_problems = problem_data[session_key]
-                            
-                            for problem in session_problems:
-                                # Filter by level if specified
-                                if level and str(problem.get('level', '')) != str(level):
-                                    continue
-                                
-                                problem_id = problem.get('id')
-                                if problem_id:
-                                    # Add default starter code if not present
-                                    if 'starter_code' not in problem:
-                                        problem['starter_code'] = f'''def solution(input_value):
+    """Load problems from Firebase, filtered by week and level"""
+    try:
+        # Get problems from Firebase
+        problems = data_manager.get_problems(week=week, level=level)
+        
+        # Add default starter code to problems that don't have it
+        for problem_id, problem in problems.items():
+            if 'starter_code' not in problem:
+                problem['starter_code'] = f'''def solution(input_value):
     """
     {problem.get('description', 'Solve the problem')}
     
@@ -168,37 +148,11 @@ def load_problems(week=None, level=None):
     # Write your code here
     pass
 '''
-                                    problems[problem_id] = problem
-                        else:
-                            # Legacy support: single problem per file
-                            problem_id = problem_data.get('id')
-                            if not problem_id:
-                                import re
-                                match = re.search(r'(\d+)', filename)
-                                if match:
-                                    problem_id = int(match.group(1))
-                            
-                            if problem_id:
-                                if 'starter_code' not in problem_data:
-                                    problem_data['starter_code'] = f'''def solution(input_value):
-    """
-    {problem_data.get('description', 'Solve the problem')}
-    
-    Args:
-        input_value: The input for the problem
         
-    Returns:
-        The expected output
-    """
-    # Write your code here
-    pass
-'''
-                                problems[problem_id] = problem_data
-                                
-                except Exception as e:
-                    st.error(f"Error loading {filename}: {e}")
-    
-    return problems
+        return problems
+    except Exception as e:
+        st.error(f"Error loading problems from Firebase: {e}")
+        return {}
 
 # Function to run code with test cases
 def run_code_with_tests(code, test_cases):
