@@ -45,6 +45,12 @@ HIDE_SIDEBAR_CSS = """
     [data-testid="stSidebarNav"] {
         display: none;
     }
+    /* Hide GitHub icon and deploy button */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    [data-testid="stToolbar"] {display: none;}
+    .reportview-container .main footer {visibility: hidden;}
 </style>
 """
 
