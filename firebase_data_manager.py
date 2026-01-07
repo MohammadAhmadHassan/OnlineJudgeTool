@@ -494,6 +494,9 @@ class FirebaseDataManager:
     def get_problems(self, week: Optional[int] = None, level: Optional[int] = None) -> dict:
         """
         Retrieve problems from Firebase, optionally filtered by week and level
+        Handles both formats:
+        1. Direct: {"session1": [...], "session2": [...]}
+        2. Nested: {"sessions": {"session1": {...}, "session2": {...}}}
         
         Args:
             week: Week number (corresponds to session number)
@@ -504,6 +507,7 @@ class FirebaseDataManager:
         """
         try:
             problems = {}
+            problem_counter = 1  # Auto-generate numeric IDs
             
             # Determine session to fetch
             if week:
@@ -513,27 +517,87 @@ class FirebaseDataManager:
                 
                 if doc.exists:
                     data = doc.to_dict()
-                    problems_list = data.get('problems', [])
+                    
+                    # Check if this is the nested "sessions" format
+                    if 'sessions' in data:
+                        sessions_data = data.get('sessions', {})
+                        session_data = sessions_data.get(session_name, {})
+                        problems_list = session_data.get('problems', [])
+                    else:
+                        # Direct format
+                        problems_list = data.get('problems', [])
                     
                     # Convert list to dict and filter by level if specified
                     for problem in problems_list:
+                        # Skip if not a dict (data structure issue)
+                        if not isinstance(problem, dict):
+                            print(f"[WARNING] Skipping invalid problem data (not a dict): {type(problem)}")
+                            continue
+                        
+                        # Use existing ID or auto-generate
                         problem_id = problem.get('id')
-                        if problem_id:
-                            # Filter by level if specified
-                            if level is None or str(problem.get('level', '')) == str(level):
-                                problems[problem_id] = problem
+                        if not isinstance(problem_id, int):
+                            # If ID is string or missing, generate numeric ID
+                            problem_id = problem_counter
+                            problem['id'] = problem_id
+                        
+                        problem_counter += 1
+                        
+                        # Add level if missing
+                        if 'level' not in problem:
+                            problem['level'] = level if level else 1
+                        
+                        # Filter by level if specified
+                        if level is None or str(problem.get('level', '')) == str(level):
+                            problems[problem_id] = problem
             else:
                 # Fetch all sessions
                 docs = self.problems_ref.stream()
                 
                 for doc in docs:
                     data = doc.to_dict()
-                    problems_list = data.get('problems', [])
                     
-                    for problem in problems_list:
-                        problem_id = problem.get('id')
-                        if problem_id:
-                            # Filter by level if specified
+                    # Check if this is the nested "sessions" format
+                    if 'sessions' in data:
+                        sessions_data = data.get('sessions', {})
+                        # Iterate through all sessions
+                        for session_key, session_data in sessions_data.items():
+                            problems_list = session_data.get('problems', [])
+                            
+                            for problem in problems_list:
+                                if not isinstance(problem, dict):
+                                    continue
+                                
+                                problem_id = problem.get('id')
+                                if not isinstance(problem_id, int):
+                                    problem_id = problem_counter
+                                    problem['id'] = problem_id
+                                
+                                problem_counter += 1
+                                
+                                if 'level' not in problem:
+                                    problem['level'] = 1
+                                
+                                if level is None or str(problem.get('level', '')) == str(level):
+                                    problems[problem_id] = problem
+                    else:
+                        # Direct format
+                        problems_list = data.get('problems', [])
+                        
+                        for problem in problems_list:
+                            if not isinstance(problem, dict):
+                                continue
+                            
+                            problem_id = problem.get('id')
+                            if not isinstance(problem_id, int):
+                                problem_id = problem_counter
+                                problem['id'] = problem_id
+                            
+                            problem_counter += 1
+                            
+                            if 'level' not in problem:
+                                problem['level'] = 1
+                            
                             if level is None or str(problem.get('level', '')) == str(level):
                                 problems[problem_id] = problem
             
