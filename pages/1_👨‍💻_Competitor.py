@@ -174,8 +174,50 @@ def run_code_with_tests(code, test_cases):
             # Capture stdout
             stdout_capture = io.StringIO()
             
-            # Create execution context
-            exec_globals = {}
+            # Create execution context with common libraries available
+            exec_globals = {
+                '__builtins__': __builtins__,
+            }
+            
+            # Import common libraries for competitor use
+            try:
+                from textblob import TextBlob
+                exec_globals['TextBlob'] = TextBlob
+            except ImportError:
+                pass
+            
+            try:
+                import numpy as np
+                exec_globals['np'] = np
+                exec_globals['numpy'] = np
+            except ImportError:
+                pass
+            
+            try:
+                import requests
+                exec_globals['requests'] = requests
+            except ImportError:
+                pass
+            
+            try:
+                import math
+                exec_globals['math'] = math
+            except ImportError:
+                pass
+            
+            try:
+                import re
+                exec_globals['re'] = re
+            except ImportError:
+                pass
+            
+            try:
+                from collections import Counter, defaultdict, deque
+                exec_globals['Counter'] = Counter
+                exec_globals['defaultdict'] = defaultdict
+                exec_globals['deque'] = deque
+            except ImportError:
+                pass
             
             # Mock input() function for entry-level programmers
             # Split test input into lines for multiple input() calls
