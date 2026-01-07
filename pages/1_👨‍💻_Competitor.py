@@ -120,34 +120,42 @@ if 'test_results' not in st.session_state:
     st.session_state.test_results = None
 if 'url_username_processed' not in st.session_state:
     st.session_state.url_username_processed = False
+if 'user_week' not in st.session_state:
+    st.session_state.user_week = None
+if 'user_level' not in st.session_state:
+    st.session_state.user_level = None
 
 # Function to load problems
-@st.cache_data
-def load_problems():
-    """Load all problems from JSON files"""
+def load_problems(week=None, level=None):
+    """Load problems filtered by week and level"""
     problems = {}
     problems_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'problems')
+    
+    # Determine session based on week (week 1 = session1, week 2 = session2, etc.)
+    session_key = f'session{week}' if week else None
     
     if os.path.exists(problems_dir):
         for filename in os.listdir(problems_dir):
             if filename.endswith('.json'):
                 try:
                     with open(os.path.join(problems_dir, filename), 'r') as f:
-                        problem = json.load(f)
+                        problem_data = json.load(f)
                         
-                        # Extract problem ID from filename if not in JSON
-                        problem_id = problem.get('id')
-                        if not problem_id:
-                            # Extract number from filename (e.g., problem1.json -> 1)
-                            import re
-                            match = re.search(r'(\d+)', filename)
-                            if match:
-                                problem_id = int(match.group(1))
-                        
-                        if problem_id:
-                            # Add default starter code if not present
-                            if 'starter_code' not in problem:
-                                problem['starter_code'] = f'''def solution(input_value):
+                        # Check if this is a session-based file
+                        if session_key and session_key in problem_data:
+                            # Load problems from the specific session
+                            session_problems = problem_data[session_key]
+                            
+                            for problem in session_problems:
+                                # Filter by level if specified
+                                if level and str(problem.get('level', '')) != str(level):
+                                    continue
+                                
+                                problem_id = problem.get('id')
+                                if problem_id:
+                                    # Add default starter code if not present
+                                    if 'starter_code' not in problem:
+                                        problem['starter_code'] = f'''def solution(input_value):
     """
     {problem.get('description', 'Solve the problem')}
     
@@ -160,7 +168,33 @@ def load_problems():
     # Write your code here
     pass
 '''
-                            problems[problem_id] = problem
+                                    problems[problem_id] = problem
+                        else:
+                            # Legacy support: single problem per file
+                            problem_id = problem_data.get('id')
+                            if not problem_id:
+                                import re
+                                match = re.search(r'(\d+)', filename)
+                                if match:
+                                    problem_id = int(match.group(1))
+                            
+                            if problem_id:
+                                if 'starter_code' not in problem_data:
+                                    problem_data['starter_code'] = f'''def solution(input_value):
+    """
+    {problem_data.get('description', 'Solve the problem')}
+    
+    Args:
+        input_value: The input for the problem
+        
+    Returns:
+        The expected output
+    """
+    # Write your code here
+    pass
+'''
+                                problems[problem_id] = problem_data
+                                
                 except Exception as e:
                     st.error(f"Error loading {filename}: {e}")
     
@@ -282,23 +316,36 @@ st.markdown("# 👨‍💻 Competitor Interface")
 
 # Registration/Login Section
 if st.session_state.competitor_name is None:
-    # Get username from session state (captured by streamlit_app_multi.py from URL)
-    # or try reading from URL directly as fallback
+    # Get parameters from session state (captured by streamlit_app_multi.py from URL)
     url_username = st.session_state.get('url_username', None)
+    url_week = st.session_state.get('url_week', None)
+    url_level = st.session_state.get('url_level', None)
     
     # Fallback: try reading from URL if not in session state
-    if not url_username and not st.session_state.url_username_processed:
+    if not st.session_state.url_username_processed:
         try:
             query_params = st.query_params
-            url_username = query_params.get('username', None)
             
-            # Handle list format (older Streamlit versions)
-            if isinstance(url_username, list) and len(url_username) > 0:
-                url_username = url_username[0]
+            if not url_week:
+                url_week = query_params.get('week', None)
+                if isinstance(url_week, list) and len(url_week) > 0:
+                    url_week = url_week[0]
+                if url_week:
+                    st.session_state.url_week = url_week
             
-            # Store in session state
-            if url_username:
-                st.session_state.url_username = url_username
+            if not url_username:
+                url_username = query_params.get('username', None)
+                if isinstance(url_username, list) and len(url_username) > 0:
+                    url_username = url_username[0]
+                if url_username:
+                    st.session_state.url_username = url_username
+            
+            if not url_level:
+                url_level = query_params.get('level', None)
+                if isinstance(url_level, list) and len(url_level) > 0:
+                    url_level = url_level[0]
+                if url_level:
+                    st.session_state.url_level = url_level
         except Exception as e:
             pass
         
@@ -328,9 +375,16 @@ if st.session_state.competitor_name is None:
                 # Register with URL username
                 data_manager.register_competitor(url_username.strip())
                 st.session_state.competitor_name = url_username.strip()
-                # Clear the URL username from session state
+                # Store week and level
+                st.session_state.user_week = url_week
+                st.session_state.user_level = url_level
+                # Clear the URL params from session state
                 if 'url_username' in st.session_state:
                     del st.session_state.url_username
+                if 'url_week' in st.session_state:
+                    del st.session_state.url_week
+                if 'url_level' in st.session_state:
+                    del st.session_state.url_level
                 st.success(f"Welcome, {url_username}! 🎉")
                 st.rerun()
         
@@ -400,7 +454,10 @@ else:
             st.rerun()
     
     # Main content
-    problems = load_problems()
+    # Load problems filtered by user's week and level
+    user_week = st.session_state.get('user_week', None)
+    user_level = st.session_state.get('user_level', None)
+    problems = load_problems(week=user_week, level=user_level)
     
     if st.session_state.current_problem is None:
         # Problem selection view

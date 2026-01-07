@@ -25,15 +25,29 @@ DASHBOARD_MODE = DASHBOARD_MODE.lower()
 if 'url_params_captured' not in st.session_state:
     try:
         query_params = st.query_params
-        username = query_params.get('username', None)
         
-        # Handle list format
+        # Get week parameter
+        week = query_params.get('week', None)
+        if isinstance(week, list) and len(week) > 0:
+            week = week[0]
+        
+        # Get username parameter
+        username = query_params.get('username', None)
         if isinstance(username, list) and len(username) > 0:
             username = username[0]
         
+        # Get level parameter
+        level = query_params.get('level', None)
+        if isinstance(level, list) and len(level) > 0:
+            level = level[0]
+        
         # Store in session state for the target page to use
+        if week:
+            st.session_state.url_week = week
         if username:
             st.session_state.url_username = username
+        if level:
+            st.session_state.url_level = level
         
         st.session_state.url_params_captured = True
     except:
