@@ -118,6 +118,8 @@ if 'code' not in st.session_state:
     st.session_state.code = ""
 if 'test_results' not in st.session_state:
     st.session_state.test_results = None
+if 'url_username_processed' not in st.session_state:
+    st.session_state.url_username_processed = False
 
 # Function to load problems
 @st.cache_data
@@ -307,13 +309,29 @@ st.markdown("# 👨‍💻 Competitor Interface")
 
 # Registration/Login Section
 if st.session_state.competitor_name is None:
-    # Get username from URL query parameters
-    query_params = st.query_params
-    url_username = query_params.get('username', None)
-    
-    # Handle list format (older Streamlit versions)
-    if isinstance(url_username, list) and len(url_username) > 0:
-        url_username = url_username[0]
+    # Get username from URL query parameters (only once)
+    url_username = None
+    if not st.session_state.url_username_processed:
+        try:
+            query_params = st.query_params
+            url_username = query_params.get('username', None)
+            
+            # Handle list format (older Streamlit versions)
+            if isinstance(url_username, list) and len(url_username) > 0:
+                url_username = url_username[0]
+            
+            # Mark as processed to avoid re-reading on rerun
+            st.session_state.url_username_processed = True
+            
+            # Store in session state
+            if url_username:
+                st.session_state.temp_username = url_username
+        except Exception as e:
+            st.error(f"Error reading URL parameters: {e}")
+            url_username = None
+    else:
+        # Use stored username from session state
+        url_username = st.session_state.get('temp_username', None)
     
     st.markdown("## 📝 Registration")
     
