@@ -280,28 +280,67 @@ st.markdown("# 👨‍💻 Competitor Interface")
 
 # Registration/Login Section
 if st.session_state.competitor_name is None:
+    # Get username from URL query parameters
+    query_params = st.query_params
+    url_username = query_params.get('username', None)
+    
+    # Handle list format (older Streamlit versions)
+    if isinstance(url_username, list) and len(url_username) > 0:
+        url_username = url_username[0]
+    
     st.markdown("## 📝 Registration")
-    st.markdown("Enter your name to start competing!")
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        name_input = st.text_input("Your Name", placeholder="Enter your full name")
-    
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Start Competition", type="primary", use_container_width=True):
-            if name_input and name_input.strip():
-                # Register competitor
-                data_manager.register_competitor(name_input.strip())
-                st.session_state.competitor_name = name_input.strip()
-                st.success(f"Welcome, {name_input}! 🎉")
+    if url_username:
+        # Username from URL - show pre-filled, disabled field
+        st.success(f"👤 Welcome from Moodle: **{url_username}**")
+        st.markdown("Your username has been automatically detected from Moodle.")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Disabled input field showing the URL username
+            st.text_input(
+                "Your Name", 
+                value=url_username,
+                disabled=True,
+                help="Username from Moodle (cannot be changed)"
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🚀 Start Competition", type="primary", use_container_width=True):
+                # Register with URL username
+                data_manager.register_competitor(url_username.strip())
+                st.session_state.competitor_name = url_username.strip()
+                st.success(f"Welcome, {url_username}! 🎉")
                 st.rerun()
-            else:
-                st.error("Please enter your name")
+        
+        st.markdown("---")
+        st.caption("ℹ️ If this is not your name, please contact your instructor.")
     
-    st.markdown("---")
-    st.info("💡 **Tip:** Make sure to enter your full name for the leaderboard!")
+    else:
+        # No username in URL - show normal registration
+        st.markdown("Enter your name to start competing!")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            name_input = st.text_input("Your Name", placeholder="Enter your full name")
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🚀 Start Competition", type="primary", use_container_width=True):
+                if name_input and name_input.strip():
+                    # Register competitor
+                    data_manager.register_competitor(name_input.strip())
+                    st.session_state.competitor_name = name_input.strip()
+                    st.success(f"Welcome, {name_input}! 🎉")
+                    st.rerun()
+                else:
+                    st.error("Please enter your name")
+        
+        st.markdown("---")
+        st.info("💡 **Tip:** Access this page from Moodle for automatic login!")
 
 else:
     # Competitor is logged in
