@@ -112,6 +112,40 @@ class DataManager:
         if hasattr(self.backend, 'add_listener'):
             return self.backend.add_listener(callback)
         return None
+    
+    # ===== PROBLEM MANAGEMENT METHODS =====
+    
+    def upload_problems(self, problems_data: dict, session_name: str = "session1") -> bool:
+        """Upload problems to Firebase"""
+        if hasattr(self.backend, 'upload_problems'):
+            return self.backend.upload_problems(problems_data, session_name)
+        print("[ERROR] Problem upload not supported by current backend")
+        return False
+    
+    def get_problems(self, week: Optional[int] = None, level: Optional[int] = None) -> dict:
+        """Retrieve problems, optionally filtered by week and level"""
+        if hasattr(self.backend, 'get_problems'):
+            return self.backend.get_problems(week=week, level=level)
+        print("[ERROR] Problem retrieval not supported by current backend")
+        return {}
+    
+    def get_problem_by_id(self, problem_id: int, week: Optional[int] = None) -> Optional[dict]:
+        """Retrieve a specific problem by ID"""
+        if hasattr(self.backend, 'get_problem_by_id'):
+            return self.backend.get_problem_by_id(problem_id, week=week)
+        return None
+    
+    def update_problem(self, session_name: str, problem_id: int, updates: dict) -> bool:
+        """Update a specific problem"""
+        if hasattr(self.backend, 'update_problem'):
+            return self.backend.update_problem(session_name, problem_id, updates)
+        return False
+    
+    def delete_problem(self, session_name: str, problem_id: int) -> bool:
+        """Delete a specific problem"""
+        if hasattr(self.backend, 'delete_problem'):
+            return self.backend.delete_problem(session_name, problem_id)
+        return False
 
 
 # Convenience function for creating data manager

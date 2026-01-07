@@ -435,3 +435,213 @@ class FirebaseDataManager:
             import traceback
             traceback.print_exc()
             return 0
+    
+    # ===== PROBLEM MANAGEMENT METHODS =====
+    
+    def upload_problems(self, problems_data: dict, session_name: str = "session1") -> bool:
+        """
+        Upload problems to Firebase
+        
+        Args:
+            problems_data: Dictionary or list of problem objects
+            session_name: Session identifier (e.g., 'session1', 'session2')
+        
+        Returns:
+            bool: True if successful
+        """
+        try:
+            # If problems_data is a dict with session keys, upload accordingly
+            if isinstance(problems_data, dict) and any(key.startswith('session') for key in problems_data.keys()):
+                # Upload each session separately
+                for session_key, problems_list in problems_data.items():
+                    if session_key.startswith('session'):
+                        doc_ref = self.problems_ref.document(session_key)
+                        doc_ref.set({
+                            'problems': problems_list,
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'session': session_key
+                        })
+                        print(f"[INFO] Uploaded {len(problems_list)} problems to {session_key}")
+            
+            # If problems_data is a list, upload to specified session
+            elif isinstance(problems_data, list):
+                doc_ref = self.problems_ref.document(session_name)
+                doc_ref.set({
+                    'problems': problems_data,
+                    'updated_at': firestore.SERVER_TIMESTAMP,
+                    'session': session_name
+                })
+                print(f"[INFO] Uploaded {len(problems_data)} problems to {session_name}")
+            
+            else:
+                print(f"[ERROR] Invalid problems_data format")
+                return False
+            
+            # Update metadata
+            metadata_ref = self.competition_ref.document('metadata')
+            metadata_ref.update({
+                'problems_uploaded': True,
+                'last_problem_update': firestore.SERVER_TIMESTAMP
+            })
+            
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to upload problems: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def get_problems(self, week: Optional[int] = None, level: Optional[int] = None) -> dict:
+        """
+        Retrieve problems from Firebase, optionally filtered by week and level
+        
+        Args:
+            week: Week number (corresponds to session number)
+            level: Level number to filter problems
+        
+        Returns:
+            dict: Dictionary of problems with problem_id as key
+        """
+        try:
+            problems = {}
+            
+            # Determine session to fetch
+            if week:
+                session_name = f'session{week}'
+                doc_ref = self.problems_ref.document(session_name)
+                doc = doc_ref.get()
+                
+                if doc.exists:
+                    data = doc.to_dict()
+                    problems_list = data.get('problems', [])
+                    
+                    # Convert list to dict and filter by level if specified
+                    for problem in problems_list:
+                        problem_id = problem.get('id')
+                        if problem_id:
+                            # Filter by level if specified
+                            if level is None or str(problem.get('level', '')) == str(level):
+                                problems[problem_id] = problem
+            else:
+                # Fetch all sessions
+                docs = self.problems_ref.stream()
+                
+                for doc in docs:
+                    data = doc.to_dict()
+                    problems_list = data.get('problems', [])
+                    
+                    for problem in problems_list:
+                        problem_id = problem.get('id')
+                        if problem_id:
+                            # Filter by level if specified
+                            if level is None or str(problem.get('level', '')) == str(level):
+                                problems[problem_id] = problem
+            
+            return problems
+        except Exception as e:
+            print(f"[ERROR] Failed to retrieve problems: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+    
+    def get_problem_by_id(self, problem_id: int, week: Optional[int] = None) -> Optional[dict]:
+        """
+        Retrieve a specific problem by ID
+        
+        Args:
+            problem_id: The problem ID
+            week: Optional week number to narrow search
+        
+        Returns:
+            dict: Problem data or None if not found
+        """
+        try:
+            problems = self.get_problems(week=week)
+            return problems.get(problem_id, None)
+        except Exception as e:
+            print(f"[ERROR] Failed to retrieve problem {problem_id}: {e}")
+            return None
+    
+    def update_problem(self, session_name: str, problem_id: int, updates: dict) -> bool:
+        """
+        Update a specific problem in Firebase
+        
+        Args:
+            session_name: Session identifier (e.g., 'session1')
+            problem_id: The problem ID to update
+            updates: Dictionary of fields to update
+        
+        Returns:
+            bool: True if successful
+        """
+        try:
+            doc_ref = self.problems_ref.document(session_name)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                problems_list = data.get('problems', [])
+                
+                # Find and update the problem
+                for i, problem in enumerate(problems_list):
+                    if problem.get('id') == problem_id:
+                        problems_list[i].update(updates)
+                        
+                        # Update in Firebase
+                        doc_ref.update({
+                            'problems': problems_list,
+                            'updated_at': firestore.SERVER_TIMESTAMP
+                        })
+                        return True
+                
+                print(f"[WARNING] Problem {problem_id} not found in {session_name}")
+                return False
+            else:
+                print(f"[ERROR] Session {session_name} not found")
+                return False
+        except Exception as e:
+            print(f"[ERROR] Failed to update problem: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def delete_problem(self, session_name: str, problem_id: int) -> bool:
+        """
+        Delete a specific problem from Firebase
+        
+        Args:
+            session_name: Session identifier (e.g., 'session1')
+            problem_id: The problem ID to delete
+        
+        Returns:
+            bool: True if successful
+        """
+        try:
+            doc_ref = self.problems_ref.document(session_name)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                problems_list = data.get('problems', [])
+                
+                # Filter out the problem to delete
+                updated_list = [p for p in problems_list if p.get('id') != problem_id]
+                
+                if len(updated_list) < len(problems_list):
+                    doc_ref.update({
+                        'problems': updated_list,
+                        'updated_at': firestore.SERVER_TIMESTAMP
+                    })
+                    print(f"[INFO] Deleted problem {problem_id} from {session_name}")
+                    return True
+                else:
+                    print(f"[WARNING] Problem {problem_id} not found in {session_name}")
+                    return False
+            else:
+                print(f"[ERROR] Session {session_name} not found")
+                return False
+        except Exception as e:
+            print(f"[ERROR] Failed to delete problem: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
