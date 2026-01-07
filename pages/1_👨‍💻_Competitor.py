@@ -132,6 +132,9 @@ def load_problems(week=None, level=None):
         # Get problems from Firebase
         problems = data_manager.get_problems(week=week, level=level)
         
+        # Debug: Show what was retrieved
+        st.sidebar.info(f"🔍 Debug: Found {len(problems)} problems (week={week}, level={level})")
+        
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():
             if 'starter_code' not in problem:
@@ -152,6 +155,8 @@ def load_problems(week=None, level=None):
         return problems
     except Exception as e:
         st.error(f"Error loading problems from Firebase: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return {}
 
 # Function to run code with test cases
