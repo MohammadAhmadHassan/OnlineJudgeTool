@@ -509,6 +509,77 @@ class FirebaseDataManager:
             problems = {}
             problem_counter = 1  # Auto-generate numeric IDs
             
+            print(f"[DEBUG] get_problems called with week={week}, level={level}")
+            
+            # First, try to fetch a document called "all_problems" or "Level1_AllProblems"
+            # This handles the case where all problems are in one document
+            for doc_name in ['Level1_AllProblems', 'all_problems', 'problems']:
+                doc_ref = self.problems_ref.document(doc_name)
+                doc = doc_ref.get()
+                
+                if doc.exists:
+                    print(f"[DEBUG] Found document: {doc_name}")
+                    data = doc.to_dict()
+                    print(f"[DEBUG] Document keys: {list(data.keys())}")
+                    
+                    # Check if this has the nested "sessions" structure
+                    if 'sessions' in data:
+                        print(f"[DEBUG] Processing nested 'sessions' structure")
+                        sessions_data = data.get('sessions', {})
+                        
+                        # Filter by week if specified
+                        if week:
+                            session_name = f'session{week}'
+                            if session_name in sessions_data:
+                                session_data = sessions_data[session_name]
+                                problems_list = session_data.get('problems', [])
+                                print(f"[DEBUG] Found {len(problems_list)} problems in {session_name}")
+                                
+                                for problem in problems_list:
+                                    if not isinstance(problem, dict):
+                                        continue
+                                    
+                                    problem_id = problem.get('id')
+                                    if not isinstance(problem_id, int):
+                                        problem_id = problem_counter
+                                        problem['id'] = problem_id
+                                    
+                                    problem_counter += 1
+                                    
+                                    if 'level' not in problem:
+                                        problem['level'] = level if level else 1
+                                    
+                                    if level is None or str(problem.get('level', '')) == str(level):
+                                        problems[problem_id] = problem
+                        else:
+                            # Get all sessions
+                            for session_key, session_data in sessions_data.items():
+                                problems_list = session_data.get('problems', [])
+                                print(f"[DEBUG] Processing {session_key} with {len(problems_list)} problems")
+                                
+                                for problem in problems_list:
+                                    if not isinstance(problem, dict):
+                                        continue
+                                    
+                                    problem_id = problem.get('id')
+                                    if not isinstance(problem_id, int):
+                                        problem_id = problem_counter
+                                        problem['id'] = problem_id
+                                    
+                                    problem_counter += 1
+                                    
+                                    if 'level' not in problem:
+                                        problem['level'] = 1
+                                    
+                                    if level is None or str(problem.get('level', '')) == str(level):
+                                        problems[problem_id] = problem
+                        
+                        print(f"[DEBUG] Returning {len(problems)} problems after filtering")
+                        return problems
+            
+            print(f"[DEBUG] No all_problems document found, trying individual session documents")
+            
+            # Fallback: Try individual session documents
             # Determine session to fetch
             if week:
                 session_name = f'session{week}'
@@ -517,15 +588,8 @@ class FirebaseDataManager:
                 
                 if doc.exists:
                     data = doc.to_dict()
-                    
-                    # Check if this is the nested "sessions" format
-                    if 'sessions' in data:
-                        sessions_data = data.get('sessions', {})
-                        session_data = sessions_data.get(session_name, {})
-                        problems_list = session_data.get('problems', [])
-                    else:
-                        # Direct format
-                        problems_list = data.get('problems', [])
+                    problems_list = data.get('problems', [])
+                    print(f"[DEBUG] Found {len(problems_list)} problems in {session_name}")
                     
                     # Convert list to dict and filter by level if specified
                     for problem in problems_list:
@@ -550,6 +614,8 @@ class FirebaseDataManager:
                         # Filter by level if specified
                         if level is None or str(problem.get('level', '')) == str(level):
                             problems[problem_id] = problem
+                else:
+                    print(f"[DEBUG] No document found for {session_name}")
             else:
                 # Fetch all sessions
                 docs = self.problems_ref.stream()
