@@ -115,10 +115,10 @@ class DataManager:
     
     # ===== PROBLEM MANAGEMENT METHODS =====
     
-    def upload_problems(self, problems_data: dict, session_name: str = "session1") -> bool:
+    def upload_problems(self, problems_data: dict, session_name: str = "session1", level: int = 1) -> bool:
         """Upload problems to Firebase"""
         if hasattr(self.backend, 'upload_problems'):
-            return self.backend.upload_problems(problems_data, session_name)
+            return self.backend.upload_problems(problems_data, session_name, level)
         print("[ERROR] Problem upload not supported by current backend")
         return False
     
