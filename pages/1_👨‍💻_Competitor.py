@@ -358,9 +358,9 @@ if st.session_state.competitor_name is None:
                 # Register with URL username
                 data_manager.register_competitor(url_username.strip())
                 st.session_state.competitor_name = url_username.strip()
-                # Store week and level
-                st.session_state.user_week = url_week
-                st.session_state.user_level = url_level
+                # Store week and level (convert to int if they exist)
+                st.session_state.user_week = int(url_week) if url_week else None
+                st.session_state.user_level = int(url_level) if url_level else None
                 # Clear the URL params from session state
                 if 'url_username' in st.session_state:
                     del st.session_state.url_username
