@@ -132,13 +132,6 @@ def load_problems(week=None, level=None):
         # Get problems from Firebase
         problems = data_manager.get_problems(week=week, level=level)
         
-        # Debug: Show what was retrieved
-        if len(problems) == 0:
-            st.sidebar.warning(f"⚠️ Debug: Found 0 problems (week={week}, level={level})")
-            st.sidebar.info("💡 Check Streamlit Cloud logs for Firebase connection details")
-        else:
-            st.sidebar.success(f"✅ Debug: Found {len(problems)} problems (week={week}, level={level})")
-        
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():
             if 'starter_code' not in problem:
