@@ -438,13 +438,14 @@ class FirebaseDataManager:
     
     # ===== PROBLEM MANAGEMENT METHODS =====
     
-    def upload_problems(self, problems_data: dict, session_name: str = "session1") -> bool:
+    def upload_problems(self, problems_data: dict, session_name: str = "session1", level: int = 1) -> bool:
         """
         Upload problems to Firebase
         
         Args:
             problems_data: Dictionary or list of problem objects
             session_name: Session identifier (e.g., 'session1', 'session2')
+            level: Level number (e.g., 1, 2, 3) to prevent overwriting between levels
         
         Returns:
             bool: True if successful
@@ -452,26 +453,32 @@ class FirebaseDataManager:
         try:
             # If problems_data is a dict with session keys, upload accordingly
             if isinstance(problems_data, dict) and any(key.startswith('session') for key in problems_data.keys()):
-                # Upload each session separately
+                # Upload each session separately with level prefix
                 for session_key, problems_list in problems_data.items():
                     if session_key.startswith('session'):
-                        doc_ref = self.problems_ref.document(session_key)
+                        # Add level to document name to prevent overwriting
+                        doc_name = f"level{level}_{session_key}"
+                        doc_ref = self.problems_ref.document(doc_name)
                         doc_ref.set({
                             'problems': problems_list,
                             'updated_at': firestore.SERVER_TIMESTAMP,
-                            'session': session_key
+                            'session': session_key,
+                            'level': level
                         })
-                        print(f"[INFO] Uploaded {len(problems_list)} problems to {session_key}")
+                        print(f"[INFO] Uploaded {len(problems_list)} problems to {doc_name}")
             
             # If problems_data is a list, upload to specified session
             elif isinstance(problems_data, list):
-                doc_ref = self.problems_ref.document(session_name)
+                # Add level to document name to prevent overwriting
+                doc_name = f"level{level}_{session_name}"
+                doc_ref = self.problems_ref.document(doc_name)
                 doc_ref.set({
                     'problems': problems_data,
                     'updated_at': firestore.SERVER_TIMESTAMP,
-                    'session': session_name
+                    'session': session_name,
+                    'level': level
                 })
-                print(f"[INFO] Uploaded {len(problems_data)} problems to {session_name}")
+                print(f"[INFO] Uploaded {len(problems_data)} problems to {doc_name}")
             
             else:
                 print(f"[ERROR] Invalid problems_data format")
@@ -508,10 +515,21 @@ class FirebaseDataManager:
             # Determine session to fetch
             if week:
                 session_name = f'session{week}'
-                doc_ref = self.problems_ref.document(session_name)
-                doc = doc_ref.get()
+                # Try level-specific document first, then fall back to non-level document
+                doc_names_to_try = []
+                if level:
+                    doc_names_to_try.append(f'level{level}_{session_name}')
+                doc_names_to_try.append(session_name)
                 
-                if doc.exists:
+                doc = None
+                for doc_name in doc_names_to_try:
+                    doc_ref = self.problems_ref.document(doc_name)
+                    doc = doc_ref.get()
+                    if doc.exists:
+                        print(f"[DEBUG] Found session document: {doc_name}")
+                        break
+                
+                if doc and doc.exists:
                     data = doc.to_dict()
                     problems_list = data.get('problems', [])
                     
