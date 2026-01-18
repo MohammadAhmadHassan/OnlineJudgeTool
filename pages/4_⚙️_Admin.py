@@ -52,6 +52,14 @@ else:
         
         st.info("💡 Upload JSON file with problems structure: `{'session1': [...], 'session2': [...]}`")
         
+        # Level selector
+        upload_level = st.selectbox(
+            "Select Level",
+            options=[1, 2, 3, 4, 5],
+            index=0,
+            help="Choose the level for these problems. Different levels will be stored separately."
+        )
+        
         uploaded_file = st.file_uploader("Choose a JSON file", type=['json'])
         
         if uploaded_file is not None:
@@ -71,10 +79,11 @@ else:
                 # Upload button
                 if st.button("🚀 Upload to Firebase", type="primary"):
                     with st.spinner("Uploading..."):
-                        success = data_manager.upload_problems(problems_data)
+                        success = data_manager.upload_problems(problems_data, level=upload_level)
                         
                         if success:
-                            st.success("🎉 Problems uploaded successfully!")
+                            st.success(f"🎉 Level {upload_level} problems uploaded successfully!")
+                            st.info(f"Documents created with names like: level{upload_level}_session1, level{upload_level}_session2, etc.")
                         else:
                             st.error("❌ Failed to upload problems")
             
@@ -86,6 +95,14 @@ else:
         st.markdown("---")
         st.markdown("### 📝 Manual Input")
         
+        manual_level = st.selectbox(
+            "Select Level (Manual)",
+            options=[1, 2, 3, 4, 5],
+            index=0,
+            key="manual_level",
+            help="Choose the level for these problems. Different levels will be stored separately."
+        )
+        
         session_name = st.text_input("Session name (e.g., session1, session2)")
         problems_json = st.text_area("Paste problems JSON (array of problem objects)", height=300)
         
@@ -93,10 +110,10 @@ else:
             if session_name and problems_json:
                 try:
                     problems_list = json.loads(problems_json)
-                    success = data_manager.upload_problems(problems_list, session_name)
+                    success = data_manager.upload_problems(problems_list, session_name, manual_level)
                     
                     if success:
-                        st.success(f"✅ Uploaded {len(problems_list)} problems to {session_name}")
+                        st.success(f"✅ Uploaded {len(problems_list)} problems to level{manual_level}_{session_name}")
                     else:
                         st.error("❌ Upload failed")
                 except json.JSONDecodeError as e:
