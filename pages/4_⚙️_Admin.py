@@ -79,7 +79,7 @@ else:
                 # Upload button
                 if st.button("🚀 Upload to Firebase", type="primary"):
                     with st.spinner("Uploading..."):
-                        success = data_manager.upload_problems(problems_data, level=upload_level)
+                        success = data_manager.upload_problems(problems_data=problems_data, level=upload_level)
                         
                         if success:
                             st.success(f"🎉 Level {upload_level} problems uploaded successfully!")
