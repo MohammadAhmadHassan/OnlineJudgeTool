@@ -326,8 +326,10 @@ if st.session_state.competitor_name is None:
         with col2:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🚀 Start Competition", type="primary", use_container_width=True):
-                # Register with URL username
-                data_manager.register_competitor(url_username.strip())
+                # Register with URL username, week, and level
+                week_int = int(url_week) if url_week else None
+                level_int = int(url_level) if url_level else None
+                data_manager.register_competitor(url_username.strip(), week=week_int, level=level_int)
                 st.session_state.competitor_name = url_username.strip()
                 # Store week and level
                 st.session_state.user_week = url_week

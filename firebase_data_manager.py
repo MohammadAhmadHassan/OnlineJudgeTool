@@ -93,7 +93,7 @@ class FirebaseDataManager:
         except Exception as e:
             print(f"Error starting competition: {e}")
     
-    def register_competitor(self, name: str) -> bool:
+    def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
         try:
             # Check if competitor exists
@@ -104,14 +104,22 @@ class FirebaseDataManager:
                 return False  # Competitor already exists
             
             # Create new competitor
-            doc_ref.set({
+            competitor_data = {
                 'name': name,
                 'joined_at': datetime.now().isoformat(),
                 'current_problem': 1,
                 'problems': {},
                 'last_activity': datetime.now().isoformat(),
                 'created_at': firestore.SERVER_TIMESTAMP
-            })
+            }
+            
+            # Add week and level if provided
+            if week is not None:
+                competitor_data['week'] = week
+            if level is not None:
+                competitor_data['level'] = level
+            
+            doc_ref.set(competitor_data)
             return True
         except Exception as e:
             print(f"Error registering competitor: {e}")
