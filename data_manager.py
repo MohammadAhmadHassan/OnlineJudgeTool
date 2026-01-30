@@ -63,9 +63,9 @@ class DataManager:
         """Mark competition as started"""
         return self.backend.start_competition()
     
-    def register_competitor(self, name: str) -> bool:
+    def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
-        return self.backend.register_competitor(name)
+        return self.backend.register_competitor(name, week=week, level=level)
     
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""

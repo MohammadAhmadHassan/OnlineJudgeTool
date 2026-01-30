@@ -105,6 +105,23 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 📋 Filters")
+    
+    # Level and Week filters
+    level_filter = st.selectbox(
+        "📊 Filter by Level",
+        options=["All Levels", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
+        index=0,
+        help="Filter competitors by their assigned level"
+    )
+    
+    week_filter = st.selectbox(
+        "📅 Filter by Week",
+        options=["All Weeks", "Week 1", "Week 2", "Week 3", "Week 4", "Week 5", 
+                 "Week 6", "Week 7", "Week 8"],
+        index=0,
+        help="Filter competitors by their assigned week"
+    )
+    
     show_pending_only = st.checkbox("Show only pending reviews", value=False)
     search_query = st.text_input("🔍 Search competitor", "")
     
@@ -211,9 +228,28 @@ left_col, right_col = st.columns([2, 3])
 with left_col:
     st.markdown("### 👥 Competitors")
     
+    # Parse filter values
+    selected_level = None
+    if level_filter != "All Levels":
+        selected_level = int(level_filter.split()[-1])  # Extract number from "Level X"
+    
+    selected_week = None
+    if week_filter != "All Weeks":
+        selected_week = int(week_filter.split()[-1])  # Extract number from "Week X"
+    
     # Prepare competitor data for table
     competitor_data = []
     for name, data in competitors.items():
+        # Get competitor's week and level
+        comp_week = data.get('week')
+        comp_level = data.get('level')
+        
+        # Apply level and week filters
+        if selected_level is not None and comp_level != selected_level:
+            continue
+        if selected_week is not None and comp_week != selected_week:
+            continue
+        
         problems = data.get('problems', {})
         
         # Count pending reviews
@@ -238,7 +274,7 @@ with left_col:
         # Status
         status = "Active" if current_problem != '-' else "Idle"
         
-        # Apply filters
+        # Apply other filters
         if show_pending_only and pending_reviews == 0:
             continue
         if search_query and search_query.lower() not in name.lower():
@@ -246,6 +282,8 @@ with left_col:
         
         competitor_data.append({
             'Name': name,
+            'Level': comp_level if comp_level is not None else '-',
+            'Week': comp_week if comp_week is not None else '-',
             'Pending': pending_reviews,
             'Current': current_problem,
             'Solved': solved,
