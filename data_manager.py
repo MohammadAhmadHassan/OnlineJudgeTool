@@ -67,6 +67,12 @@ class DataManager:
         """Register a new competitor"""
         return self.backend.register_competitor(name, week=week, level=level)
     
+    def update_competitor_level_week(self, name: str, week: int = None, level: int = None) -> bool:
+        """Update competitor's level and week"""
+        if hasattr(self.backend, 'update_competitor_level_week'):
+            return self.backend.update_competitor_level_week(name, week=week, level=level)
+        return False
+    
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""
         return self.backend.update_competitor_problem(name, problem_id)

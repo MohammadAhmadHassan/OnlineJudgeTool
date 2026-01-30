@@ -125,6 +125,23 @@ class FirebaseDataManager:
             print(f"Error registering competitor: {e}")
             return False
     
+    def update_competitor_level_week(self, name: str, week: int = None, level: int = None):
+        """Update competitor's level and week (for migrating old data)"""
+        try:
+            doc_ref = self.competitors_ref.document(name)
+            update_data = {'last_activity': datetime.now().isoformat()}
+            
+            if week is not None:
+                update_data['week'] = week
+            if level is not None:
+                update_data['level'] = level
+            
+            doc_ref.update(update_data)
+            return True
+        except Exception as e:
+            print(f"Error updating competitor level/week: {e}")
+            return False
+    
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""
         try:
