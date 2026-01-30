@@ -375,12 +375,39 @@ else:
     # Competitor is logged in
     competitor_name = st.session_state.competitor_name
     
+    # Get competitor data
+    comp_data = data_manager.get_competitor_data(competitor_name) or {}
+    
+    # Check if old competitor data needs to be updated with level and week
+    stored_week = comp_data.get('week')
+    stored_level = comp_data.get('level')
+    session_week = st.session_state.get('user_week')
+    session_level = st.session_state.get('user_level')
+    
+    # If competitor data doesn't have week/level but session does, update Firebase
+    needs_update = False
+    update_week = None
+    update_level = None
+    
+    if stored_week is None and session_week is not None:
+        needs_update = True
+        update_week = int(session_week) if session_week else None
+    
+    if stored_level is None and session_level is not None:
+        needs_update = True
+        update_level = int(session_level) if session_level else None
+    
+    if needs_update:
+        success = data_manager.update_competitor_level_week(competitor_name, week=update_week, level=update_level)
+        if success:
+            # Reload data after update
+            comp_data = data_manager.get_competitor_data(competitor_name) or {}
+    
     # Sidebar
     with st.sidebar:
         st.markdown(f"### 👤 {competitor_name}")
         
         # Get competitor stats
-        comp_data = data_manager.get_competitor_data(competitor_name) or {}
         problems_data = comp_data.get('problems', {})
         
         solved_count = sum(
