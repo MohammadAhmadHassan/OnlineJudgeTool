@@ -138,6 +138,22 @@ def load_problems(week=None, level=None):
         # Get problems from Firebase (using cache)
         problems = get_cached_problems(week=week, level=level)
         
+        # If no problems found and not already defaulting, try week 1 level 1
+        if not problems and (week != 1 or level != 1):
+            print(f"[WARNING] No problems found for week={week}, level={level}. Defaulting to week 1, level 1")
+            problems = get_cached_problems(week=1, level=1)
+            
+            # Update session state to reflect the default
+            if problems:
+                st.session_state.user_week = 1
+                st.session_state.user_level = 1
+                st.warning("⚠️ No problems found for your assigned week/level. Showing Week 1, Level 1 problems.")
+        
+        # If still no problems, return empty dict
+        if not problems:
+            print(f"[WARNING] No problems found even for week 1, level 1")
+            return {}
+        
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():
             if 'starter_code' not in problem:
@@ -160,6 +176,19 @@ def load_problems(week=None, level=None):
         st.error(f"Error loading problems from Firebase: {e}")
         import traceback
         st.code(traceback.format_exc())
+        
+        # Try to fallback to week 1 level 1 on error
+        try:
+            print(f"[ERROR RECOVERY] Attempting to load week 1, level 1 as fallback")
+            problems = get_cached_problems(week=1, level=1)
+            if problems:
+                st.session_state.user_week = 1
+                st.session_state.user_level = 1
+                st.warning("⚠️ Error loading problems. Showing Week 1, Level 1 problems.")
+                return problems
+        except:
+            pass
+        
         return {}
 
 # Function to run code with test cases
@@ -449,6 +478,12 @@ else:
     user_week = st.session_state.get('user_week', None)
     user_level = st.session_state.get('user_level', None)
     problems = load_problems(week=user_week, level=user_level)
+    
+    # Check if no problems available
+    if not problems:
+        st.warning("⚠️ No problems are currently available.")
+        st.info("💡 Please contact the administrator to upload problems for this competition.")
+        st.stop()
     
     if st.session_state.current_problem is None:
         # Problem selection view
