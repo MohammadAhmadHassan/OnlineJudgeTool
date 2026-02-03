@@ -30,7 +30,73 @@ class FirebaseDataManager:
         if not hasattr(self, 'initialized'):
             self.initialized = False
             self.db = None
+            # Cache configuration
+            self._cache = {}
+            self._cache_timestamps = {}
+            self._cache_ttl = {
+                'all_competitors': 3,  # 3 seconds cache
+                'leaderboard': 3,      # 3 seconds cache
+                'problems': 3600,      # 1 hour cache (problems never change)
+                'competitor': 2,       # 2 seconds cache for individual competitor
+                'statistics': 5        # 5 seconds cache for stats
+            }
             self._initialize_firebase()
+    
+    def _get_from_cache(self, cache_key: str, ttl_key: str = None):
+        """Get data from cache if not expired"""
+        if cache_key not in self._cache:
+            return None
+        
+        # Check if expired
+        if cache_key in self._cache_timestamps:
+            age = (datetime.now() - self._cache_timestamps[cache_key]).total_seconds()
+            ttl = self._cache_ttl.get(ttl_key or cache_key, 5)
+            if age > ttl:
+                # Expired, remove from cache
+                del self._cache[cache_key]
+                del self._cache_timestamps[cache_key]
+                return None
+        
+        return self._cache[cache_key]
+    
+    def _set_cache(self, cache_key: str, data):
+        """Store data in cache with timestamp"""
+        self._cache[cache_key] = data
+        self._cache_timestamps[cache_key] = datetime.now()
+    
+    def _invalidate_cache(self, pattern: str = None):
+        """Invalidate cache entries matching pattern or all if None"""
+        if pattern is None:
+            self._cache.clear()
+            self._cache_timestamps.clear()
+        else:
+            keys_to_remove = [k for k in self._cache.keys() if pattern in k]
+            for key in keys_to_remove:
+                if key in self._cache:
+                    del self._cache[key]
+                if key in self._cache_timestamps:
+                    del self._cache_timestamps[key]
+    
+    def get_cache_stats(self) -> dict:
+        """Get cache statistics for monitoring"""
+        stats = {
+            'total_entries': len(self._cache),
+            'entries': {}
+        }
+        
+        for key, timestamp in self._cache_timestamps.items():
+            age = (datetime.now() - timestamp).total_seconds()
+            ttl_key = key.split('_')[0] if '_' in key else key
+            ttl = self._cache_ttl.get(ttl_key, 5)
+            
+            stats['entries'][key] = {
+                'age_seconds': round(age, 2),
+                'ttl_seconds': ttl,
+                'expired': age > ttl,
+                'remaining_seconds': max(0, round(ttl - age, 2))
+            }
+        
+        return stats
     
     def _initialize_firebase(self):
         """Initialize Firebase Admin SDK"""
@@ -90,6 +156,8 @@ class FirebaseDataManager:
                 'competition_started': True,
                 'start_time': datetime.now().isoformat()
             })
+            # Invalidate all cache
+            self._invalidate_cache()
         except Exception as e:
             print(f"Error starting competition: {e}")
     
@@ -133,6 +201,8 @@ class FirebaseDataManager:
                 'current_problem': problem_id,
                 'last_activity': datetime.now().isoformat()
             })
+            # Invalidate specific competitor cache
+            self._invalidate_cache(f'competitor_{name}')
         except Exception as e:
             print(f"Error updating competitor problem: {e}")
     
@@ -185,32 +255,57 @@ class FirebaseDataManager:
                 'last_activity': datetime.now().isoformat()
             })
             
+            # Invalidate relevant caches
+            self._invalidate_cache(f'competitor_{name}')
+            self._invalidate_cache('all_competitors')
+            self._invalidate_cache('leaderboard')
+            
             return True
         except Exception as e:
             print(f"Error submitting solution: {e}")
             return False
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
-        """Get data for a specific competitor"""
+        """Get data for a specific competitor with caching"""
         try:
+            # Check cache first
+            cache_key = f'competitor_{name}'
+            cached_data = self._get_from_cache(cache_key, 'competitor')
+            if cached_data is not None:
+                return cached_data
+            
+            # Fetch from database
             doc_ref = self.competitors_ref.document(name)
             doc = doc_ref.get()
             
             if doc.exists:
-                return doc.to_dict()
+                data = doc.to_dict()
+                # Cache the result
+                self._set_cache(cache_key, data)
+                return data
             return None
         except Exception as e:
             print(f"Error getting competitor data: {e}")
             return None
     
     def get_all_competitors(self) -> Dict[str, dict]:
-        """Get data for all competitors"""
+        """Get data for all competitors with caching"""
         try:
+            # Check cache first
+            cache_key = 'all_competitors'
+            cached_data = self._get_from_cache(cache_key, 'all_competitors')
+            if cached_data is not None:
+                return cached_data
+            
+            # Fetch from database
             competitors = {}
             docs = self.competitors_ref.stream()
             
             for doc in docs:
                 competitors[doc.id] = doc.to_dict()
+            
+            # Cache the result
+            self._set_cache(cache_key, competitors)
             
             return competitors
         except Exception as e:
@@ -218,8 +313,14 @@ class FirebaseDataManager:
             return {}
     
     def get_leaderboard(self) -> List[dict]:
-        """Generate leaderboard data"""
+        """Generate leaderboard data with caching"""
         try:
+            # Check cache first
+            cache_key = 'leaderboard'
+            cached_data = self._get_from_cache(cache_key, 'leaderboard')
+            if cached_data is not None:
+                return cached_data
+            
             competitors = self.get_all_competitors()
             leaderboard = []
             
@@ -268,6 +369,9 @@ class FirebaseDataManager:
             for entry in leaderboard[:3]:  # Print top 3
                 score = entry['approved_problems'] - entry['rejected_problems']
                 print(f"  - {entry['name']}: solved={entry['problems_solved']}, approved={entry['approved_problems']}, rejected={entry['rejected_problems']}, score={score:+d}")
+            
+            # Cache the leaderboard
+            self._set_cache('leaderboard', leaderboard)
             
             return leaderboard
         except Exception as e:
@@ -320,6 +424,8 @@ class FirebaseDataManager:
             })
             
             print("Competition data reset successfully")
+            # Clear all cache
+            self._invalidate_cache()
         except Exception as e:
             print(f"Error resetting competition: {e}")
     
@@ -378,6 +484,10 @@ class FirebaseDataManager:
                 print(f"[VERIFY] Read back judge_approval status: {verify_status}")
                 if verify_status == status:
                     print(f"[SUCCESS] Verification passed! Status is now {verify_status}")
+                    # Invalidate relevant caches
+                    self._invalidate_cache(f'competitor_{name}')
+                    self._invalidate_cache('all_competitors')
+                    self._invalidate_cache('leaderboard')
                     return True
                 else:
                     print(f"[ERROR] Verification failed! Expected {status}, got {verify_status}")
@@ -499,6 +609,9 @@ class FirebaseDataManager:
                 'last_problem_update': firestore.SERVER_TIMESTAMP
             })
             
+            # Invalidate problems cache
+            self._invalidate_cache('problems')
+            
             return True
         except Exception as e:
             print(f"[ERROR] Failed to upload problems: {e}")
@@ -508,7 +621,7 @@ class FirebaseDataManager:
     
     def get_problems(self, week: Optional[int] = None, level: Optional[int] = None) -> dict:
         """
-        Retrieve problems from Firebase, optionally filtered by week and level
+        Retrieve problems from Firebase, optionally filtered by week and level with caching
         Handles both formats:
         1. Direct: {"session1": [...], "session2": [...]}
         2. Nested: {"sessions": {"session1": {...}, "session2": {...}}}
@@ -521,6 +634,12 @@ class FirebaseDataManager:
             dict: Dictionary of problems with problem_id as key
         """
         try:
+            # Check cache first
+            cache_key = f'problems_w{week}_l{level}'
+            cached_data = self._get_from_cache(cache_key, 'problems')
+            if cached_data is not None:
+                return cached_data
+            
             problems = {}
             problem_counter = 1  # Auto-generate numeric IDs
             
@@ -590,6 +709,9 @@ class FirebaseDataManager:
                                         problems[problem_id] = problem
                         
                         print(f"[DEBUG] Returning {len(problems)} problems after filtering")
+                        # Cache the result
+                        cache_key = f'problems_w{week}_l{level}'
+                        self._set_cache(cache_key, problems)
                         return problems
             
             print(f"[DEBUG] No all_problems document found, trying individual session documents")
@@ -692,6 +814,10 @@ class FirebaseDataManager:
                             
                             if level is None or str(problem.get('level', '')) == str(level):
                                 problems[problem_id] = problem
+            
+            # Cache the result before returning
+            cache_key = f'problems_w{week}_l{level}'
+            self._set_cache(cache_key, problems)
             
             return problems
         except Exception as e:

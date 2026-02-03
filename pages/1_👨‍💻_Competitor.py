@@ -125,12 +125,18 @@ if 'user_week' not in st.session_state:
 if 'user_level' not in st.session_state:
     st.session_state.user_level = None
 
+# Cached problems loader
+@st.cache_data(ttl=3600)  # Cache problems for 1 hour (they never change)
+def get_cached_problems(week=None, level=None):
+    """Get problems with Streamlit caching"""
+    return data_manager.get_problems(week=week, level=level)
+
 # Function to load problems
 def load_problems(week=None, level=None):
     """Load problems from Firebase, filtered by week and level"""
     try:
-        # Get problems from Firebase
-        problems = data_manager.get_problems(week=week, level=level)
+        # Get problems from Firebase (using cache)
+        problems = get_cached_problems(week=week, level=level)
         
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():

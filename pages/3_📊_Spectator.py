@@ -116,6 +116,17 @@ def get_data_manager():
 
 data_manager = get_data_manager()
 
+# Cached data fetching functions with TTL
+@st.cache_data(ttl=3)  # Cache for 3 seconds
+def get_cached_leaderboard():
+    """Get leaderboard with Streamlit caching"""
+    return data_manager.get_leaderboard()
+
+@st.cache_data(ttl=3)  # Cache for 3 seconds
+def get_cached_competitors():
+    """Get all competitors with Streamlit caching"""
+    return data_manager.get_all_competitors()
+
 # Auto-refresh
 if 'last_refresh_spectator' not in st.session_state:
     st.session_state.last_refresh_spectator = datetime.now()
@@ -135,9 +146,9 @@ st.markdown("# 📊 Live Leaderboard")
 st.markdown("Real-time competition standings")
 st.markdown("---")
 
-# Get leaderboard data
-leaderboard = data_manager.get_leaderboard()
-competitors = data_manager.get_all_competitors()
+# Get leaderboard data (using cached functions)
+leaderboard = get_cached_leaderboard()
+competitors = get_cached_competitors()
 
 # Statistics
 total_competitors = len(competitors)

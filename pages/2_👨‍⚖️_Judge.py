@@ -90,6 +90,17 @@ def get_data_manager():
 
 data_manager = get_data_manager()
 
+# Cached data fetching functions with TTL
+@st.cache_data(ttl=3)  # Cache for 3 seconds
+def get_cached_competitors():
+    """Get all competitors with Streamlit caching"""
+    return data_manager.get_all_competitors()
+
+@st.cache_data(ttl=3)  # Cache for 3 seconds
+def get_cached_leaderboard():
+    """Get leaderboard with Streamlit caching"""
+    return data_manager.get_leaderboard()
+
 # Header
 st.markdown("# 👨‍⚖️ Judge Dashboard")
 st.markdown("Monitor and review competitor submissions in real-time")
@@ -129,6 +140,22 @@ with st.sidebar:
     if st.button("📊 Export Report", use_container_width=True):
         st.info("Export functionality coming soon!")
     
+    # Cache Statistics
+    st.markdown("---")
+    st.markdown("### 💾 Cache Monitor")
+    
+    if hasattr(data_manager.backend, 'get_cache_stats'):
+        cache_stats = data_manager.backend.get_cache_stats()
+        st.metric("Cached Entries", cache_stats['total_entries'])
+        
+        with st.expander("📊 Cache Details"):
+            for key, info in cache_stats.get('entries', {}).items():
+                status = "🟢 Active" if not info['expired'] else "🔴 Expired"
+                st.write(f"**{key}**: {status}")
+                st.caption(f"Age: {info['age_seconds']}s | TTL: {info['ttl_seconds']}s | Remaining: {info['remaining_seconds']}s")
+    
+    st.markdown("---")
+    
     # Fix missing judge_approval fields button
     if st.button("🔧 Fix Missing Approval Fields", use_container_width=True, 
                  help="Adds judge_approval field to problems that don't have it"):
@@ -160,9 +187,9 @@ if auto_refresh:
         st.session_state.last_refresh = time.time()
         st.rerun()
 
-# Get data
-competitors = data_manager.get_all_competitors()
-leaderboard = data_manager.get_leaderboard()
+# Get data (using cached functions)
+competitors = get_cached_competitors()
+leaderboard = get_cached_leaderboard()
 
 # Calculate statistics
 total_competitors = len(competitors)
