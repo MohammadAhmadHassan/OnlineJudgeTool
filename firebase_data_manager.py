@@ -4,6 +4,7 @@ Firebase Data Manager
 Handles shared data storage using Firebase Firestore for multi-device competition system
 """
 import threading
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 import firebase_admin
@@ -30,15 +31,22 @@ class FirebaseDataManager:
         if not hasattr(self, 'initialized'):
             self.initialized = False
             self.db = None
-            # Cache configuration
+            self._connection_healthy = False
+            self._last_health_check = None
+            self._health_check_interval = 30  # Check every 30 seconds
+            self._max_retries = 3
+            self._retry_delay = 0.5  # Initial retry delay in seconds
+            self._timeout = 10  # Default timeout for operations
+            
+            # Cache configuration - reduced TTL for production
             self._cache = {}
             self._cache_timestamps = {}
             self._cache_ttl = {
-                'all_competitors': 3,  # 3 seconds cache
-                'leaderboard': 3,      # 3 seconds cache
-                'problems': 3600,      # 1 hour cache (problems never change)
-                'competitor': 2,       # 2 seconds cache for individual competitor
-                'statistics': 5        # 5 seconds cache for stats
+                'all_competitors': 2,  # 2 seconds cache (reduced for real-time updates)
+                'leaderboard': 2,      # 2 seconds cache
+                'problems': 86400,     # 24 hours cache (problems never change during competition)
+                'competitor': 1,       # 1 second cache for individual competitor
+                'statistics': 3        # 3 seconds cache for stats
             }
             self._initialize_firebase()
     
@@ -98,39 +106,132 @@ class FirebaseDataManager:
         
         return stats
     
+    def get_health_status(self) -> dict:
+        """Get detailed health status for monitoring"""
+        return {
+            'initialized': self.initialized,
+            'connection_healthy': self._connection_healthy,
+            'last_health_check': self._last_health_check.isoformat() if self._last_health_check else None,
+            'seconds_since_check': (datetime.now() - self._last_health_check).total_seconds() if self._last_health_check else None,
+            'cache_entries': len(self._cache),
+            'timeout_setting': self._timeout,
+            'max_retries': self._max_retries
+        }
+    
     def _initialize_firebase(self):
-        """Initialize Firebase Admin SDK"""
+        """Initialize Firebase Admin SDK with retry logic"""
         if self.initialized:
             return
         
+        for attempt in range(self._max_retries):
+            try:
+                # Check if already initialized
+                try:
+                    firebase_admin.get_app()
+                    print(f"[Firebase] Using existing Firebase app")
+                except ValueError:
+                    # Not initialized, so initialize it
+                    creds_dict = FirebaseConfig.load_credentials()
+                    
+                    if not creds_dict:
+                        raise Exception(
+                            "Firebase credentials not found! Please create 'firebase_credentials.json' "
+                            "with your Firebase service account credentials.\n"
+                            "Get it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key"
+                        )
+                    
+                    cred = credentials.Certificate(creds_dict)
+                    firebase_admin.initialize_app(cred)
+                    print(f"[Firebase] Initialized new Firebase app")
+                
+                # Get Firestore client
+                self.db = firestore.client()
+                
+                # Collection references
+                self.competitors_ref = self.db.collection('competitors')
+                self.competition_ref = self.db.collection('competition')
+                self.problems_ref = self.db.collection('problems')
+                
+                # Test connection
+                self._test_connection()
+                
+                self.initialized = True
+                self._connection_healthy = True
+                self._last_health_check = datetime.now()
+                print(f"[Firebase] Connection established successfully")
+                
+                # Initialize competition metadata if not exists
+                self._initialize_competition_metadata()
+                return
+                
+            except Exception as e:
+                print(f"[Firebase] Init attempt {attempt + 1}/{self._max_retries} failed: {e}")
+                if attempt < self._max_retries - 1:
+                    time.sleep(self._retry_delay * (2 ** attempt))  # Exponential backoff
+                else:
+                    raise Exception(f"Failed to initialize Firebase after {self._max_retries} attempts: {e}")
+    
+    def _test_connection(self):
+        """Test Firebase connection health"""
         try:
-            # Check if already initialized
-            firebase_admin.get_app()
-        except ValueError:
-            # Not initialized, so initialize it
-            creds_dict = FirebaseConfig.load_credentials()
-            
-            if not creds_dict:
-                raise Exception(
-                    "Firebase credentials not found! Please create 'firebase_credentials.json' "
-                    "with your Firebase service account credentials.\n"
-                    "Get it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key"
-                )
-            
-            cred = credentials.Certificate(creds_dict)
-            firebase_admin.initialize_app(cred)
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get(timeout=self._timeout)
+            self._connection_healthy = True
+            self._last_health_check = datetime.now()
+            return True
+        except Exception as e:
+            print(f"[Firebase] Connection test failed: {e}")
+            self._connection_healthy = False
+            raise
+    
+    def _check_connection_health(self):
+        """Check if connection health check is needed"""
+        if self._last_health_check is None:
+            return
         
-        # Get Firestore client
-        self.db = firestore.client()
-        self.initialized = True
+        time_since_check = (datetime.now() - self._last_health_check).total_seconds()
+        if time_since_check > self._health_check_interval:
+            try:
+                self._test_connection()
+            except:
+                print(f"[Firebase] Health check failed, attempting reconnection...")
+                self._reconnect()
+    
+    def _reconnect(self):
+        """Attempt to reconnect to Firebase"""
+        try:
+            print(f"[Firebase] Attempting to reconnect...")
+            self.initialized = False
+            self.db = None
+            self._initialize_firebase()
+        except Exception as e:
+            print(f"[Firebase] Reconnection failed: {e}")
+            self._connection_healthy = False
+    
+    def _execute_with_retry(self, operation, operation_name="operation"):
+        """Execute a Firebase operation with retry logic and timeout"""
+        # Check connection health periodically
+        self._check_connection_health()
         
-        # Collection references
-        self.competitors_ref = self.db.collection('competitors')
-        self.competition_ref = self.db.collection('competition')
-        self.problems_ref = self.db.collection('problems')
-        
-        # Initialize competition metadata if not exists
-        self._initialize_competition_metadata()
+        for attempt in range(self._max_retries):
+            try:
+                return operation()
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_retryable = any(keyword in error_msg for keyword in 
+                    ['timeout', 'connection', 'unavailable', 'deadline', 'cancelled'])
+                
+                if attempt < self._max_retries - 1 and is_retryable:
+                    wait_time = self._retry_delay * (2 ** attempt)
+                    print(f"[Firebase] {operation_name} attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    
+                    # Try to reconnect if it's a connection issue
+                    if 'connection' in error_msg:
+                        self._reconnect()
+                else:
+                    print(f"[Firebase] {operation_name} failed after {attempt + 1} attempts: {e}")
+                    raise
     
     def _initialize_competition_metadata(self):
         """Initialize competition metadata document"""
@@ -150,23 +251,26 @@ class FirebaseDataManager:
     
     def start_competition(self):
         """Mark competition as started"""
-        try:
+        def operation():
             doc_ref = self.competition_ref.document('metadata')
             doc_ref.update({
                 'competition_started': True,
                 'start_time': datetime.now().isoformat()
-            })
+            }, timeout=self._timeout)
             # Invalidate all cache
             self._invalidate_cache()
+        
+        try:
+            self._execute_with_retry(operation, "start_competition")
         except Exception as e:
-            print(f"Error starting competition: {e}")
+            print(f"[Firebase] Error starting competition: {e}")
     
     def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
-        try:
+        def operation():
             # Check if competitor exists
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._timeout)
             
             if doc.exists:
                 return False  # Competitor already exists
@@ -187,31 +291,38 @@ class FirebaseDataManager:
             if level is not None:
                 competitor_data['level'] = level
             
-            doc_ref.set(competitor_data)
+            doc_ref.set(competitor_data, timeout=self._timeout)
+            self._invalidate_cache('all_competitors')
             return True
+        
+        try:
+            return self._execute_with_retry(operation, f"register_competitor:{name}")
         except Exception as e:
-            print(f"Error registering competitor: {e}")
+            print(f"[Firebase] Error registering competitor {name}: {e}")
             return False
     
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""
-        try:
+        def operation():
             doc_ref = self.competitors_ref.document(name)
             doc_ref.update({
                 'current_problem': problem_id,
                 'last_activity': datetime.now().isoformat()
-            })
+            }, timeout=self._timeout)
             # Invalidate specific competitor cache
             self._invalidate_cache(f'competitor_{name}')
+        
+        try:
+            self._execute_with_retry(operation, f"update_competitor_problem:{name}")
         except Exception as e:
-            print(f"Error updating competitor problem: {e}")
+            print(f"[Firebase] Error updating competitor problem for {name}: {e}")
     
     def submit_solution(self, name: str, problem_id: int, code: str, 
                        test_results: List[dict], all_passed: bool):
         """Record a solution submission"""
-        try:
+        def operation():
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._timeout)
             
             if not doc.exists:
                 return False
@@ -253,7 +364,7 @@ class FirebaseDataManager:
             doc_ref.update({
                 'problems': problems,
                 'last_activity': datetime.now().isoformat()
-            })
+            }, timeout=self._timeout)
             
             # Invalidate relevant caches
             self._invalidate_cache(f'competitor_{name}')
@@ -261,8 +372,11 @@ class FirebaseDataManager:
             self._invalidate_cache('leaderboard')
             
             return True
+        
+        try:
+            return self._execute_with_retry(operation, f"submit_solution:{name}:{problem_id}")
         except Exception as e:
-            print(f"Error submitting solution: {e}")
+            print(f"[Firebase] Error submitting solution for {name}: {e}")
             return False
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
@@ -275,17 +389,25 @@ class FirebaseDataManager:
                 return cached_data
             
             # Fetch from database
-            doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get()
+            def operation():
+                doc_ref = self.competitors_ref.document(name)
+                doc = doc_ref.get(timeout=self._timeout)
+                
+                if doc.exists:
+                    data = doc.to_dict()
+                    # Cache the result
+                    self._set_cache(cache_key, data)
+                    return data
+                return None
             
-            if doc.exists:
-                data = doc.to_dict()
-                # Cache the result
-                self._set_cache(cache_key, data)
-                return data
-            return None
+            return self._execute_with_retry(operation, f"get_competitor_data:{name}")
         except Exception as e:
-            print(f"Error getting competitor data: {e}")
+            print(f"[Firebase] Error getting competitor data for {name}: {e}")
+            # Return cached data if available, even if expired
+            cache_key = f'competitor_{name}'
+            if cache_key in self._cache:
+                print(f"[Firebase] Returning stale cache for {name}")
+                return self._cache[cache_key]
             return None
     
     def get_all_competitors(self) -> Dict[str, dict]:
@@ -298,18 +420,26 @@ class FirebaseDataManager:
                 return cached_data
             
             # Fetch from database
-            competitors = {}
-            docs = self.competitors_ref.stream()
+            def operation():
+                competitors = {}
+                # Use list() to fetch all at once with timeout
+                docs = list(self.competitors_ref.stream(timeout=self._timeout * 2))
+                
+                for doc in docs:
+                    competitors[doc.id] = doc.to_dict()
+                
+                # Cache the result
+                self._set_cache(cache_key, competitors)
+                return competitors
             
-            for doc in docs:
-                competitors[doc.id] = doc.to_dict()
-            
-            # Cache the result
-            self._set_cache(cache_key, competitors)
-            
-            return competitors
+            return self._execute_with_retry(operation, "get_all_competitors")
         except Exception as e:
-            print(f"Error getting all competitors: {e}")
+            print(f"[Firebase] Error getting all competitors: {e}")
+            # Return stale cache if available
+            cache_key = 'all_competitors'
+            if cache_key in self._cache:
+                print(f"[Firebase] Returning stale cache for all_competitors")
+                return self._cache[cache_key]
             return {}
     
     def get_leaderboard(self) -> List[dict]:
@@ -379,8 +509,14 @@ class FirebaseDataManager:
             return []
     
     def get_problem_statistics(self) -> dict:
-        """Get statistics for each problem"""
+        """Get statistics for each problem with caching"""
         try:
+            # Check cache first
+            cache_key = 'statistics'
+            cached_data = self._get_from_cache(cache_key, 'statistics')
+            if cached_data is not None:
+                return cached_data
+            
             competitors = self.get_all_competitors()
             stats = {}
             
@@ -401,18 +537,24 @@ class FirebaseDataManager:
                     if best_result and best_result.get('all_passed', False):
                         stats[problem_id]['total_solvers'] += 1
             
+            # Cache the result
+            self._set_cache(cache_key, stats)
             return stats
         except Exception as e:
-            print(f"Error getting problem statistics: {e}")
+            print(f"[Firebase] Error getting problem statistics: {e}")
+            # Return stale cache if available
+            cache_key = 'statistics'
+            if cache_key in self._cache:
+                return  self._cache[cache_key]
             return {}
     
     def reset_competition(self):
         """Reset all competition data"""
-        try:
+        def operation():
             # Delete all competitor documents
-            docs = self.competitors_ref.stream()
+            docs = list(self.competitors_ref.stream(timeout=self._timeout * 2))
             for doc in docs:
-                doc.reference.delete()
+                doc.reference.delete(timeout=self._timeout)
             
             # Reset competition metadata
             doc_ref = self.competition_ref.document('metadata')
@@ -421,24 +563,27 @@ class FirebaseDataManager:
                 'start_time': None,
                 'created_at': firestore.SERVER_TIMESTAMP,
                 'problems_loaded': []
-            })
+            }, timeout=self._timeout)
             
-            print("Competition data reset successfully")
+            print("[Firebase] Competition data reset successfully")
             # Clear all cache
             self._invalidate_cache()
+        
+        try:
+            self._execute_with_retry(operation, "reset_competition")
         except Exception as e:
-            print(f"Error resetting competition: {e}")
+            print(f"[Firebase] Error resetting competition: {e}")
     
     def set_judge_approval(self, name: str, problem_id: int, status: str):
         """Set judge approval status for a problem (approved/rejected)"""
-        try:
+        def operation():
             problem_id_str = str(problem_id)
             print(f"[DEBUG] Setting judge approval: name={name}, problem_id={problem_id} (str: {problem_id_str}), status={status}")
             
             doc_ref = self.competitors_ref.document(name)
             
             # Get current data and update it
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._timeout)
             if not doc.exists:
                 print(f"[ERROR] Competitor {name} not found in database")
                 return False
@@ -469,15 +614,14 @@ class FirebaseDataManager:
             print(f"[DEBUG] Attempting to update with: {update_dict}")
             
             # Perform the update
-            doc_ref.update(update_dict)
+            doc_ref.update(update_dict, timeout=self._timeout)
             
             print(f"[OK] Firestore update completed for {name} - Problem {problem_id}")
             
             # Verify the update by reading back
-            import time
             time.sleep(0.5)  # Small delay to ensure Firestore has processed the update
             
-            verify_doc = doc_ref.get()
+            verify_doc = doc_ref.get(timeout=self._timeout)
             if verify_doc.exists:
                 verify_data = verify_doc.to_dict()
                 verify_status = verify_data.get('problems', {}).get(problem_id_str, {}).get('judge_approval')
@@ -494,19 +638,25 @@ class FirebaseDataManager:
                     print(f"[DEBUG] Full problem data after update: {verify_data.get('problems', {}).get(problem_id_str, {})}")
                     return False
             return True
+        
+        try:
+            return self._execute_with_retry(operation, f"set_judge_approval:{name}:{problem_id}")
         except Exception as e:
-            print(f"[ERROR] Exception in set_judge_approval: {e}")
-            print(f"[ERROR] Exception type: {type(e).__name__}")
+            print(f"[Firebase] Exception in set_judge_approval: {e}")
+            print(f"[Firebase] Exception type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
             return False
     
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""
-        try:
+        def operation():
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._timeout)
             return doc.exists
+        
+        try:
+            return self._execute_with_retry(operation, f"is_name_taken:{name}")
         except Exception as e:
             print(f"Error checking name: {e}")
             return False
