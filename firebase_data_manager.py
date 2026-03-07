@@ -37,6 +37,8 @@ class FirebaseDataManager:
             self._max_retries = 3
             self._retry_delay = 0.5  # Initial retry delay in seconds
             self._timeout = 10  # Default timeout for operations
+            self._init_timeout = 15  # Maximum time to wait for initial connection
+            self._lazy_init = False  # Flag to prevent multiple init attempts
             
             # Cache configuration - reduced TTL for production
             self._cache = {}
@@ -48,7 +50,12 @@ class FirebaseDataManager:
                 'competitor': 1,       # 1 second cache for individual competitor
                 'statistics': 3        # 3 seconds cache for stats
             }
-            self._initialize_firebase()
+            # Don't initialize immediately - do it lazily on first use
+            # This prevents blocking app startup
+            try:
+                self._initialize_firebase_async()
+            except Exception as e:
+                print(f"[Firebase] Non-blocking init warning: {e}. Will retry on first use.")
     
     def _get_from_cache(self, cache_key: str, ttl_key: str = None):
         """Get data from cache if not expired"""
@@ -106,6 +113,18 @@ class FirebaseDataManager:
         
         return stats
     
+    def _ensure_initialized(self):
+        """Ensure Firebase is initialized before operations (lazy initialization)"""
+        if not self.initialized and not self._lazy_init:
+            self._lazy_init = True
+            try:
+                print("[Firebase] Lazy initialization triggered...")
+                self._initialize_firebase_async()
+            except Exception as e:
+                print(f"[Firebase] Lazy init failed: {e}")
+                self._lazy_init = False
+                raise
+    
     def get_health_status(self) -> dict:
         """Get detailed health status for monitoring"""
         return {
@@ -118,58 +137,108 @@ class FirebaseDataManager:
             'max_retries': self._max_retries
         }
     
-    def _initialize_firebase(self):
-        """Initialize Firebase Admin SDK with retry logic"""
+    def _initialize_firebase_async(self):
+        """Initialize Firebase Admin SDK with timeout and retry logic (non-blocking)"""
         if self.initialized:
             return
         
+        import signal
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def timeout_context(seconds):
+            """Context manager for operation timeout"""
+            def timeout_handler(signum, frame):
+                raise TimeoutError(f"Firebase initialization exceeded {seconds}s timeout")
+            
+            # Set the signal handler (Unix/Linux only, will fail gracefully on Windows)
+            old_handler = None
+            try:
+                if hasattr(signal, 'SIGALRM'):
+                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(seconds)
+                yield
+            finally:
+                if hasattr(signal, 'SIGALRM') and old_handler:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+        
         for attempt in range(self._max_retries):
             try:
-                # Check if already initialized
+                # Try with timeout (Windows-compatible fallback)
                 try:
-                    firebase_admin.get_app()
-                    print(f"[Firebase] Using existing Firebase app")
-                except ValueError:
-                    # Not initialized, so initialize it
-                    creds_dict = FirebaseConfig.load_credentials()
+                    # Check if already initialized
+                    try:
+                        firebase_admin.get_app()
+                        print(f"[Firebase] Using existing Firebase app")
+                    except ValueError:
+                        # Not initialized, so initialize it
+                        creds_dict = FirebaseConfig.load_credentials()
+                        
+                        if not creds_dict:
+                            raise Exception(
+                                "Firebase credentials not found! Please create 'firebase_credentials.json' "
+                                "with your Firebase service account credentials.\n"
+                                "Get it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key"
+                            )
+                        
+                        cred = credentials.Certificate(creds_dict)
+                        firebase_admin.initialize_app(cred)
+                        print(f"[Firebase] Initialized new Firebase app")
                     
-                    if not creds_dict:
-                        raise Exception(
-                            "Firebase credentials not found! Please create 'firebase_credentials.json' "
-                            "with your Firebase service account credentials.\n"
-                            "Get it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key"
-                        )
+                    # Get Firestore client
+                    self.db = firestore.client()
                     
-                    cred = credentials.Certificate(creds_dict)
-                    firebase_admin.initialize_app(cred)
-                    print(f"[Firebase] Initialized new Firebase app")
-                
-                # Get Firestore client
-                self.db = firestore.client()
-                
-                # Collection references
-                self.competitors_ref = self.db.collection('competitors')
-                self.competition_ref = self.db.collection('competition')
-                self.problems_ref = self.db.collection('problems')
-                
-                # Test connection
-                self._test_connection()
-                
-                self.initialized = True
-                self._connection_healthy = True
-                self._last_health_check = datetime.now()
-                print(f"[Firebase] Connection established successfully")
-                
-                # Initialize competition metadata if not exists
-                self._initialize_competition_metadata()
-                return
-                
+                    # Collection references
+                    self.competitors_ref = self.db.collection('competitors')
+                    self.competition_ref = self.db.collection('competition')
+                    self.problems_ref = self.db.collection('problems')
+                    
+                    # Quick connection test (with shorter timeout)
+                    self._test_connection_quick()
+                    
+                    self.initialized = True
+                    self._connection_healthy = True
+                    self._last_health_check = datetime.now()
+                    print(f"[Firebase] Connection established successfully")
+                    
+                    # Initialize metadata in background (non-blocking)
+                    try:
+                        self._initialize_competition_metadata()
+                    except Exception as meta_error:
+                        print(f"[Firebase] Metadata init warning: {meta_error}")
+                    
+                    return
+                    
+                except TimeoutError as te:
+                    print(f"[Firebase] Init attempt {attempt + 1} timed out: {te}")
+                    raise
+                    
             except Exception as e:
                 print(f"[Firebase] Init attempt {attempt + 1}/{self._max_retries} failed: {e}")
                 if attempt < self._max_retries - 1:
-                    time.sleep(self._retry_delay * (2 ** attempt))  # Exponential backoff
+                    wait_time = self._retry_delay * (2 ** attempt)
+                    print(f"[Firebase] Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
                 else:
-                    raise Exception(f"Failed to initialize Firebase after {self._max_retries} attempts: {e}")
+                    # Don't raise - allow app to start even if Firebase fails
+                    print(f"[Firebase] WARNING: Failed to initialize after {self._max_retries} attempts. App will retry on first operation.")
+                    self.initialized = False
+                    self._lazy_init = False
+    
+    def _test_connection_quick(self):
+        """Quick connection test with short timeout"""
+        try:
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get(timeout=5)  # Shorter timeout for init
+            self._connection_healthy = True
+            self._last_health_check = datetime.now()
+            return True
+        except Exception as e:
+            print(f"[Firebase] Quick connection test failed: {e}")
+            # Don't raise - we'll try again on first operation
+            self._connection_healthy = False
+            return False
     
     def _test_connection(self):
         """Test Firebase connection health"""
@@ -192,18 +261,20 @@ class FirebaseDataManager:
         time_since_check = (datetime.now() - self._last_health_check).total_seconds()
         if time_since_check > self._health_check_interval:
             try:
-                self._test_connection()
+                # Quick non-blocking test
+                self._test_connection_quick()
             except:
-                print(f"[Firebase] Health check failed, attempting reconnection...")
-                self._reconnect()
+                print(f"[Firebase] Health check failed, will attempt reconnection on next operation...")
+                self._connection_healthy = False
     
     def _reconnect(self):
         """Attempt to reconnect to Firebase"""
         try:
             print(f"[Firebase] Attempting to reconnect...")
             self.initialized = False
+            self._lazy_init = False
             self.db = None
-            self._initialize_firebase()
+            self._initialize_firebase_async()
         except Exception as e:
             print(f"[Firebase] Reconnection failed: {e}")
             self._connection_healthy = False
@@ -234,10 +305,10 @@ class FirebaseDataManager:
                     raise
     
     def _initialize_competition_metadata(self):
-        """Initialize competition metadata document"""
+        """Initialize competition metadata document (non-blocking)"""
         try:
             doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._timeout)
             
             if not doc.exists:
                 doc_ref.set({
@@ -245,12 +316,15 @@ class FirebaseDataManager:
                     'start_time': None,
                     'created_at': firestore.SERVER_TIMESTAMP,
                     'problems_loaded': []
-                })
+                }, timeout=self._timeout)
         except Exception as e:
-            print(f"Error initializing competition metadata: {e}")
+            # Don't raise - this is non-critical
+            print(f"[Firebase] Warning: Could not initialize metadata: {e}")
     
     def start_competition(self):
         """Mark competition as started"""
+        self._ensure_initialized()  # Ensure Firebase is ready
+        
         def operation():
             doc_ref = self.competition_ref.document('metadata')
             doc_ref.update({
@@ -267,6 +341,8 @@ class FirebaseDataManager:
     
     def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
+        self._ensure_initialized()  # Ensure Firebase is ready
+        
         def operation():
             # Check if competitor exists
             doc_ref = self.competitors_ref.document(name)
@@ -381,6 +457,8 @@ class FirebaseDataManager:
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor with caching"""
+        self._ensure_initialized()  # Ensure Firebase is ready
+        
         try:
             # Check cache first
             cache_key = f'competitor_{name}'
@@ -412,6 +490,8 @@ class FirebaseDataManager:
     
     def get_all_competitors(self) -> Dict[str, dict]:
         """Get data for all competitors with caching"""
+        self._ensure_initialized()  # Ensure Firebase is ready
+        
         try:
             # Check cache first
             cache_key = 'all_competitors'
