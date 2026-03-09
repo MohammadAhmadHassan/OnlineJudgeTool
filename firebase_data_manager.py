@@ -323,53 +323,21 @@ class FirebaseDataManager:
             print(f"[Firebase] ERROR: competition_ref not ready, cannot initialize metadata")
             return
         
-        for attempt in range(self._max_retries):
-            try:
-                # Check if already initialized
-                try:
-                    firebase_admin.get_app()
-                    print(f"[Firebase] Using existing Firebase app")
-                except ValueError:
-                    # Not initialized, so initialize it
-                    creds_dict = FirebaseConfig.load_credentials()
-                    
-                    if not creds_dict:
-                        raise Exception(
-                            "Firebase credentials not found! Please create 'firebase_credentials.json' "
-                            "with your Firebase service account credentials.\n"
-                            "Get it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key"
-                        )
-                    
-                    cred = credentials.Certificate(creds_dict)
-                    firebase_admin.initialize_app(cred)
-                    print(f"[Firebase] Initialized new Firebase app")
-                
-                # Get Firestore client
-                self.db = firestore.client()
-                
-                # Collection references
-                self.competitors_ref = self.db.collection('competitors')
-                self.competition_ref = self.db.collection('competition')
-                self.problems_ref = self.db.collection('problems')
-                
-                # Test connection
-                self._test_connection()
-                
-                self.initialized = True
-                self._connection_healthy = True
-                self._last_health_check = datetime.now()
-                print(f"[Firebase] Connection established successfully")
-                
-                # Initialize competition metadata if not exists
-                self._initialize_competition_metadata()
-                return
-                
-            except Exception as e:
-                print(f"[Firebase] Init attempt {attempt + 1}/{self._max_retries} failed: {e}")
-                if attempt < self._max_retries - 1:
-                    time.sleep(self._retry_delay * (2 ** attempt))  # Exponential backoff
-                else:
-                    raise Exception(f"Failed to initialize Firebase after {self._max_retries} attempts: {e}")
+        try:
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get(timeout=self._timeout)
+            
+            if not doc.exists:
+                doc_ref.set({
+                    'competition_started': False,
+                    'start_time': None,
+                    'created_at': firestore.SERVER_TIMESTAMP,
+                    'problems_loaded': []
+                }, timeout=self._timeout)
+                print(f"[Firebase] Competition metadata initialized")
+        except Exception as e:
+            # Don't raise - this is non-critical
+            print(f"[Firebase] Warning: Could not initialize metadata: {e}")
     
     def _test_connection(self):
         """Test Firebase connection health"""
