@@ -115,7 +115,8 @@ class FirebaseDataManager:
     
     def _ensure_initialized(self, max_wait=3):
         """Wait for Firebase initialization with timeout (non-blocking)"""
-        if self.initialized:
+        # Check if fully initialized with all references
+        if self.initialized and hasattr(self, 'competitors_ref') and hasattr(self, 'competition_ref'):
             return True
         
         # Don't wait if init is in progress - just return and let it fail gracefully
@@ -133,10 +134,12 @@ class FirebaseDataManager:
             
             # Wait briefly (max_wait seconds) for init to complete
             wait_start = time.time()
-            while not self.initialized and (time.time() - wait_start) < max_wait:
+            while (time.time() - wait_start) < max_wait:
+                if self.initialized and hasattr(self, 'competitors_ref'):
+                    return True
                 time.sleep(0.1)
             
-            return self.initialized
+            return self.initialized and hasattr(self, 'competitors_ref')
         
         return False
     
@@ -162,7 +165,7 @@ class FirebaseDataManager:
         
         try:
             for attempt in range(self._max_retries):
-            try:
+                try:
                     # Check if already initialized
                     try:
                         firebase_admin.get_app()
@@ -179,13 +182,15 @@ class FirebaseDataManager:
                         firebase_admin.initialize_app(cred)
                         print(f"[Firebase] Initialized new Firebase app")
                     
-                    # Get Firestore client
+                    # Get Firestore client (CRITICAL: Must succeed before marking as initialized)
                     self.db = firestore.client()
                     
-                    # Collection references
+                    # Collection references (CRITICAL: Must be set before any operations)
                     self.competitors_ref = self.db.collection('competitors')
                     self.competition_ref = self.db.collection('competition')
                     self.problems_ref = self.db.collection('problems')
+                    
+                    print(f"[Firebase] Collection references established")
                     
                     # Quick connection test (with very short timeout)
                     if self._test_connection_quick():
@@ -202,6 +207,12 @@ class FirebaseDataManager:
                         
                         self._init_in_progress = False
                         return
+                    else:
+                        # Connection test failed, but refs are set - still mark as partially initialized
+                        self.initialized = True
+                        print(f"[Firebase] ⚠️ Connection test failed but refs are set")
+                        self._init_in_progress = False
+                        return
                     
                 except Exception as e:
                     print(f"[Firebase] Init attempt {attempt + 1} failed: {str(e)[:100]}")
@@ -216,6 +227,10 @@ class FirebaseDataManager:
                 self._lazy_init = False
     def _test_connection_quick(self):
         """Quick connection test with aggressive timeout"""
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            return False
+        
         try:
             doc_ref = self.competition_ref.document('metadata')
             doc = doc_ref.get(timeout=3)  # Very short timeout
@@ -229,6 +244,11 @@ class FirebaseDataManager:
     
     def _test_connection(self):
         """Test Firebase connection health"""
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            self._connection_healthy = False
+            return False
+        
         try:
             doc_ref = self.competition_ref.document('metadata')
             doc = doc_ref.get(timeout=self._timeout)
@@ -298,6 +318,11 @@ class FirebaseDataManager:
     
     def _initialize_competition_metadata(self):
         """Initialize competition metadata document (non-blocking)"""
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            print(f"[Firebase] ERROR: competition_ref not ready, cannot initialize metadata")
+            return
+        
         try:
             doc_ref = self.competition_ref.document('metadata')
             doc = doc_ref.get(timeout=self._timeout)
@@ -318,6 +343,11 @@ class FirebaseDataManager:
         if not self._ensure_initialized(max_wait=2):
             print("[Firebase] WARNING: Starting competition without full init")
         
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            print(f"[Firebase] ERROR: competition_ref not ready, cannot start competition")
+            return
+        
         def operation():
             doc_ref = self.competition_ref.document('metadata')
             doc_ref.update({
@@ -337,6 +367,11 @@ class FirebaseDataManager:
         # Try to ensure initialized but don't block for long
         if not self._ensure_initialized(max_wait=2):
             print(f"[Firebase] WARNING: Registering {name} without full init, will retry...")
+        
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot register {name}")
+            return False
         
         def operation():
             # Check if competitor exists
@@ -374,6 +409,11 @@ class FirebaseDataManager:
     
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot update problem for {name}")
+            return
+        
         def operation():
             doc_ref = self.competitors_ref.document(name)
             doc_ref.update({
@@ -391,6 +431,11 @@ class FirebaseDataManager:
     def submit_solution(self, name: str, problem_id: int, code: str, 
                        test_results: List[dict], all_passed: bool):
         """Record a solution submission"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot submit solution for {name}")
+            return
+        
         def operation():
             doc_ref = self.competitors_ref.document(name)
             doc = doc_ref.get(timeout=self._timeout)
@@ -452,6 +497,11 @@ class FirebaseDataManager:
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor with caching"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot get competitor data for {name}")
+            return None
+        
         try:
             # Check cache first
             cache_key = f'competitor_{name}'
@@ -489,6 +539,11 @@ class FirebaseDataManager:
             cached_data = self._get_from_cache(cache_key, 'all_competitors')
             if cached_data is not None:
                 return cached_data
+            
+            # Ensure Firebase is initialized with collection references
+            if not hasattr(self, 'competitors_ref'):
+                print("[Firebase] Collection refs not ready, returning empty dict")
+                return {}
             
             # Fetch from database
             def operation():
@@ -621,6 +676,11 @@ class FirebaseDataManager:
     
     def reset_competition(self):
         """Reset all competition data"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref') or not hasattr(self, 'competition_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot reset competition")
+            return
+        
         def operation():
             # Delete all competitor documents
             docs = list(self.competitors_ref.stream(timeout=self._timeout * 2))
@@ -854,6 +914,11 @@ class FirebaseDataManager:
         Returns:
             dict: Dictionary of problems with problem_id as key
         """
+        # Ensure collection ref exists
+        if not hasattr(self, 'problems_ref'):
+            print(f"[Firebase] ERROR: problems_ref not ready, cannot get problems")
+            return {}
+        
         try:
             # Check cache first
             cache_key = f'problems_w{week}_l{level}'
