@@ -34,9 +34,12 @@ class FirebaseDataManager:
             self._connection_healthy = False
             self._last_health_check = None
             self._health_check_interval = 30  # Check every 30 seconds
-            self._max_retries = 3
-            self._retry_delay = 0.5  # Initial retry delay in seconds
-            self._timeout = 10  # Default timeout for operations
+            self._max_retries = 2  # Reduced retries for faster failure
+            self._retry_delay = 0.3  # Shorter retry delay
+            self._timeout = 5  # Aggressive timeout for operations
+            self._init_timeout = 10  # Maximum time to wait for initial connection
+            self._lazy_init = False  # Flag to prevent multiple init attempts
+            self._init_in_progress = False  # Flag to track if init is running
             
             # Cache configuration - reduced TTL for production
             self._cache = {}
@@ -48,7 +51,11 @@ class FirebaseDataManager:
                 'competitor': 1,       # 1 second cache for individual competitor
                 'statistics': 3        # 3 seconds cache for stats
             }
-            self._initialize_firebase()
+            # Start initialization in background thread - completely non-blocking
+            print("[Firebase] Starting background initialization...")
+            import threading
+            init_thread = threading.Thread(target=self._initialize_firebase_background, daemon=True)
+            init_thread.start()
     
     def _get_from_cache(self, cache_key: str, ttl_key: str = None):
         """Get data from cache if not expired"""
@@ -106,6 +113,36 @@ class FirebaseDataManager:
         
         return stats
     
+    def _ensure_initialized(self, max_wait=3):
+        """Wait for Firebase initialization with timeout (non-blocking)"""
+        # Check if fully initialized with all references
+        if self.initialized and hasattr(self, 'competitors_ref') and hasattr(self, 'competition_ref'):
+            return True
+        
+        # Don't wait if init is in progress - just return and let it fail gracefully
+        if self._init_in_progress:
+            print("[Firebase] Init in progress, will use cache or retry...")
+            return False
+        
+        # If not initialized and not in progress, try to start it
+        if not self._lazy_init:
+            self._lazy_init = True
+            print("[Firebase] Quick initialization attempt...")
+            import threading
+            init_thread = threading.Thread(target=self._initialize_firebase_background, daemon=True)
+            init_thread.start()
+            
+            # Wait briefly (max_wait seconds) for init to complete
+            wait_start = time.time()
+            while (time.time() - wait_start) < max_wait:
+                if self.initialized and hasattr(self, 'competitors_ref'):
+                    return True
+                time.sleep(0.1)
+            
+            return self.initialized and hasattr(self, 'competitors_ref')
+        
+        return False
+    
     def get_health_status(self) -> dict:
         """Get detailed health status for monitoring"""
         return {
@@ -118,9 +155,172 @@ class FirebaseDataManager:
             'max_retries': self._max_retries
         }
     
-    def _initialize_firebase(self):
-        """Initialize Firebase Admin SDK with retry logic"""
-        if self.initialized:
+    def _initialize_firebase_background(self):
+        """Initialize Firebase in background thread (completely non-blocking)"""
+        if self.initialized or self._init_in_progress:
+            return
+        
+        self._init_in_progress = True
+        print("[Firebase] Background initialization started...")
+        
+        try:
+            for attempt in range(self._max_retries):
+                try:
+                    # Check if already initialized
+                    try:
+                        firebase_admin.get_app()
+                        print(f"[Firebase] Using existing Firebase app")
+                    except ValueError:
+                        # Not initialized, so initialize it
+                        creds_dict = FirebaseConfig.load_credentials()
+                        
+                        if not creds_dict:
+                            print(f"[Firebase] ERROR: No credentials found")
+                            break
+                        
+                        cred = credentials.Certificate(creds_dict)
+                        firebase_admin.initialize_app(cred)
+                        print(f"[Firebase] Initialized new Firebase app")
+                    
+                    # Get Firestore client (CRITICAL: Must succeed before marking as initialized)
+                    self.db = firestore.client()
+                    
+                    # Collection references (CRITICAL: Must be set before any operations)
+                    self.competitors_ref = self.db.collection('competitors')
+                    self.competition_ref = self.db.collection('competition')
+                    self.problems_ref = self.db.collection('problems')
+                    
+                    print(f"[Firebase] Collection references established")
+                    
+                    # Quick connection test (with very short timeout)
+                    if self._test_connection_quick():
+                        self.initialized = True
+                        self._connection_healthy = True
+                        self._last_health_check = datetime.now()
+                        print(f"[Firebase] ✅ Connection ready")
+                        
+                        # Initialize metadata in background
+                        try:
+                            self._initialize_competition_metadata()
+                        except:
+                            pass
+                        
+                        self._init_in_progress = False
+                        return
+                    else:
+                        # Connection test failed, but refs are set - still mark as partially initialized
+                        self.initialized = True
+                        print(f"[Firebase] ⚠️ Connection test failed but refs are set")
+                        self._init_in_progress = False
+                        return
+                    
+                except Exception as e:
+                    print(f"[Firebase] Init attempt {attempt + 1} failed: {str(e)[:100]}")
+                    if attempt < self._max_retries - 1:
+                        time.sleep(self._retry_delay)
+                    else:
+                        print(f"[Firebase] ⚠️ Init failed, operations will use cache")
+        
+        finally:
+            self._init_in_progress = False
+            if not self.initialized:
+                self._lazy_init = False
+    def _test_connection_quick(self):
+        """Quick connection test with aggressive timeout"""
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            return False
+        
+        try:
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get(timeout=3)  # Very short timeout
+            self._connection_healthy = True
+            self._last_health_check = datetime.now()
+            return True
+        except Exception as e:
+            print(f"[Firebase] Quick test failed: {str(e)[:50]}")
+            self._connection_healthy = False
+            return False
+    
+    def _test_connection(self):
+        """Test Firebase connection health"""
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            self._connection_healthy = False
+            return False
+        
+        try:
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get(timeout=self._timeout)
+            self._connection_healthy = True
+            self._last_health_check = datetime.now()
+            return True
+        except Exception as e:
+            print(f"[Firebase] Connection test failed: {e}")
+            self._connection_healthy = False
+            raise
+    
+    def _check_connection_health(self):
+        """Check if connection health check is needed"""
+        if self._last_health_check is None:
+            return
+        
+        time_since_check = (datetime.now() - self._last_health_check).total_seconds()
+        if time_since_check > self._health_check_interval:
+            try:
+                # Quick non-blocking test
+                self._test_connection_quick()
+            except:
+                print(f"[Firebase] Health check failed, will attempt reconnection on next operation...")
+                self._connection_healthy = False
+    
+    def _reconnect(self):
+        """Attempt to reconnect to Firebase"""
+        try:
+            print(f"[Firebase] Attempting to reconnect...")
+            self.initialized = False
+            self._lazy_init = False
+            self._init_in_progress = False
+            self.db = None
+            
+            # Start reconnection in background thread
+            import threading
+            reconnect_thread = threading.Thread(target=self._initialize_firebase_background, daemon=True)
+            reconnect_thread.start()
+        except Exception as e:
+            print(f"[Firebase] Reconnection failed: {e}")
+            self._connection_healthy = False
+    
+    def _execute_with_retry(self, operation, operation_name="operation"):
+        """Execute a Firebase operation with retry logic and timeout"""
+        # Check connection health periodically
+        self._check_connection_health()
+        
+        for attempt in range(self._max_retries):
+            try:
+                return operation()
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_retryable = any(keyword in error_msg for keyword in 
+                    ['timeout', 'connection', 'unavailable', 'deadline', 'cancelled'])
+                
+                if attempt < self._max_retries - 1 and is_retryable:
+                    wait_time = self._retry_delay * (2 ** attempt)
+                    print(f"[Firebase] {operation_name} attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    
+                    # Try to reconnect if it's a connection issue
+                    if 'connection' in error_msg:
+                        self._reconnect()
+                else:
+                    print(f"[Firebase] {operation_name} failed after {attempt + 1} attempts: {e}")
+                    raise
+    
+    def _initialize_competition_metadata(self):
+        """Initialize competition metadata document (non-blocking)"""
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            print(f"[Firebase] ERROR: competition_ref not ready, cannot initialize metadata")
             return
         
         for attempt in range(self._max_retries):
@@ -176,68 +376,6 @@ class FirebaseDataManager:
         try:
             doc_ref = self.competition_ref.document('metadata')
             doc = doc_ref.get(timeout=self._timeout)
-            self._connection_healthy = True
-            self._last_health_check = datetime.now()
-            return True
-        except Exception as e:
-            print(f"[Firebase] Connection test failed: {e}")
-            self._connection_healthy = False
-            raise
-    
-    def _check_connection_health(self):
-        """Check if connection health check is needed"""
-        if self._last_health_check is None:
-            return
-        
-        time_since_check = (datetime.now() - self._last_health_check).total_seconds()
-        if time_since_check > self._health_check_interval:
-            try:
-                self._test_connection()
-            except:
-                print(f"[Firebase] Health check failed, attempting reconnection...")
-                self._reconnect()
-    
-    def _reconnect(self):
-        """Attempt to reconnect to Firebase"""
-        try:
-            print(f"[Firebase] Attempting to reconnect...")
-            self.initialized = False
-            self.db = None
-            self._initialize_firebase()
-        except Exception as e:
-            print(f"[Firebase] Reconnection failed: {e}")
-            self._connection_healthy = False
-    
-    def _execute_with_retry(self, operation, operation_name="operation"):
-        """Execute a Firebase operation with retry logic and timeout"""
-        # Check connection health periodically
-        self._check_connection_health()
-        
-        for attempt in range(self._max_retries):
-            try:
-                return operation()
-            except Exception as e:
-                error_msg = str(e).lower()
-                is_retryable = any(keyword in error_msg for keyword in 
-                    ['timeout', 'connection', 'unavailable', 'deadline', 'cancelled'])
-                
-                if attempt < self._max_retries - 1 and is_retryable:
-                    wait_time = self._retry_delay * (2 ** attempt)
-                    print(f"[Firebase] {operation_name} attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    
-                    # Try to reconnect if it's a connection issue
-                    if 'connection' in error_msg:
-                        self._reconnect()
-                else:
-                    print(f"[Firebase] {operation_name} failed after {attempt + 1} attempts: {e}")
-                    raise
-    
-    def _initialize_competition_metadata(self):
-        """Initialize competition metadata document"""
-        try:
-            doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get()
             
             if not doc.exists:
                 doc_ref.set({
@@ -245,12 +383,21 @@ class FirebaseDataManager:
                     'start_time': None,
                     'created_at': firestore.SERVER_TIMESTAMP,
                     'problems_loaded': []
-                })
+                }, timeout=self._timeout)
         except Exception as e:
-            print(f"Error initializing competition metadata: {e}")
+            # Don't raise - this is non-critical
+            print(f"[Firebase] Warning: Could not initialize metadata: {e}")
     
     def start_competition(self):
         """Mark competition as started"""
+        if not self._ensure_initialized(max_wait=2):
+            print("[Firebase] WARNING: Starting competition without full init")
+        
+        # Ensure collection ref exists
+        if not hasattr(self, 'competition_ref'):
+            print(f"[Firebase] ERROR: competition_ref not ready, cannot start competition")
+            return
+        
         def operation():
             doc_ref = self.competition_ref.document('metadata')
             doc_ref.update({
@@ -267,6 +414,15 @@ class FirebaseDataManager:
     
     def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
+        # Try to ensure initialized but don't block for long
+        if not self._ensure_initialized(max_wait=2):
+            print(f"[Firebase] WARNING: Registering {name} without full init, will retry...")
+        
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot register {name}")
+            return False
+        
         def operation():
             # Check if competitor exists
             doc_ref = self.competitors_ref.document(name)
@@ -303,6 +459,11 @@ class FirebaseDataManager:
     
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot update problem for {name}")
+            return
+        
         def operation():
             doc_ref = self.competitors_ref.document(name)
             doc_ref.update({
@@ -320,6 +481,11 @@ class FirebaseDataManager:
     def submit_solution(self, name: str, problem_id: int, code: str, 
                        test_results: List[dict], all_passed: bool):
         """Record a solution submission"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot submit solution for {name}")
+            return
+        
         def operation():
             doc_ref = self.competitors_ref.document(name)
             doc = doc_ref.get(timeout=self._timeout)
@@ -381,6 +547,11 @@ class FirebaseDataManager:
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor with caching"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot get competitor data for {name}")
+            return None
+        
         try:
             # Check cache first
             cache_key = f'competitor_{name}'
@@ -418,6 +589,11 @@ class FirebaseDataManager:
             cached_data = self._get_from_cache(cache_key, 'all_competitors')
             if cached_data is not None:
                 return cached_data
+            
+            # Ensure Firebase is initialized with collection references
+            if not hasattr(self, 'competitors_ref'):
+                print("[Firebase] Collection refs not ready, returning empty dict")
+                return {}
             
             # Fetch from database
             def operation():
@@ -550,6 +726,11 @@ class FirebaseDataManager:
     
     def reset_competition(self):
         """Reset all competition data"""
+        # Ensure collection references exist
+        if not hasattr(self, 'competitors_ref') or not hasattr(self, 'competition_ref'):
+            print(f"[Firebase] ERROR: Collection refs not ready, cannot reset competition")
+            return
+        
         def operation():
             # Delete all competitor documents
             docs = list(self.competitors_ref.stream(timeout=self._timeout * 2))
@@ -783,6 +964,11 @@ class FirebaseDataManager:
         Returns:
             dict: Dictionary of problems with problem_id as key
         """
+        # Ensure collection ref exists
+        if not hasattr(self, 'problems_ref'):
+            print(f"[Firebase] ERROR: problems_ref not ready, cannot get problems")
+            return {}
+        
         try:
             # Check cache first
             cache_key = f'problems_w{week}_l{level}'

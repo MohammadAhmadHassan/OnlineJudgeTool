@@ -109,12 +109,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize data manager
-@st.cache_resource
-def get_data_manager():
-    return create_data_manager()
+# Initialize data manager per session (not globally cached to avoid blocking)
+if 'data_manager' not in st.session_state:
+    st.session_state.data_manager = create_data_manager()
 
-data_manager = get_data_manager()
+data_manager = st.session_state.data_manager
 
 # Cached data fetching functions with TTL
 @st.cache_data(ttl=3)  # Cache for 3 seconds
