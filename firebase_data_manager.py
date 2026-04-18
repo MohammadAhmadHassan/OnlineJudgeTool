@@ -256,16 +256,15 @@ class FirebaseDataManager:
             if current_best is None or submission['passed_tests'] > current_best.get('passed_tests', 0):
                 problems[problem_key]['best_result'] = submission
 
-            # A solved submission enters the shared review queue.
-            if submission['all_passed']:
-                problems[problem_key]['judge_approval'] = 'pending'
-                problems[problem_key]['judge_approval_time'] = None
-                problems[problem_key]['review_status'] = 'pending_review'
-                problems[problem_key]['review_requested_at'] = submission['submitted_at']
-                problems[problem_key]['review_locked_by'] = None
-                problems[problem_key]['review_locked_at'] = None
-                problems[problem_key]['review_completed_at'] = None
-                problems[problem_key]['review_completed_by'] = None
+            # Any new submission should enter the shared review queue.
+            problems[problem_key]['judge_approval'] = 'pending'
+            problems[problem_key]['judge_approval_time'] = None
+            problems[problem_key]['review_status'] = 'pending_review'
+            problems[problem_key]['review_requested_at'] = submission['submitted_at']
+            problems[problem_key]['review_locked_by'] = None
+            problems[problem_key]['review_locked_at'] = None
+            problems[problem_key]['review_completed_at'] = None
+            problems[problem_key]['review_completed_by'] = None
             
             # Update document
             doc_ref.update({
@@ -293,25 +292,23 @@ class FirebaseDataManager:
         if judge_approval in ['approved', 'rejected']:
             return 'reviewed'
 
-        best_result = problem_data.get('best_result', {})
-        if best_result and best_result.get('all_passed', False):
+        if problem_data.get('submissions', []):
             return 'pending_review'
 
         return 'not_ready'
 
     def get_review_queue(self) -> List[dict]:
-        """Return all solved problems as review queue entries."""
+        """Return all submitted problems as review queue entries."""
         try:
             competitors = self.get_all_competitors()
             queue = []
 
             for competitor_name, competitor_data in competitors.items():
                 for problem_id, problem_data in competitor_data.get('problems', {}).items():
-                    best_result = problem_data.get('best_result', {})
-                    if not best_result or not best_result.get('all_passed', False):
+                    submissions = problem_data.get('submissions', [])
+                    if not submissions:
                         continue
 
-                    submissions = problem_data.get('submissions', [])
                     latest_submission = submissions[-1] if submissions else {}
                     queue.append({
                         'competitor': competitor_name,
@@ -323,8 +320,9 @@ class FirebaseDataManager:
                         'reviewed_at': problem_data.get('review_completed_at') or problem_data.get('judge_approval_time'),
                         'submitted_at': latest_submission.get('submitted_at', latest_submission.get('timestamp')),
                         'attempts': len(submissions),
-                        'passed_tests': best_result.get('passed_tests', 0),
-                        'total_tests': best_result.get('total_tests', 0),
+                        'passed_tests': latest_submission.get('passed_tests', latest_submission.get('tests_passed', 0)),
+                        'total_tests': latest_submission.get('total_tests', 0),
+                        'all_passed': latest_submission.get('all_passed', False),
                         'level': competitor_data.get('level'),
                         'week': competitor_data.get('week')
                     })
@@ -353,7 +351,7 @@ class FirebaseDataManager:
             return []
 
     def start_problem_review(self, name: str, problem_id: int, judge_id: str) -> dict:
-        """Lock a solved problem for review so only one judge can access it."""
+        """Lock a submitted problem for review so only one judge can access it."""
         try:
             problem_id_str = str(problem_id)
             doc_ref = self.competitors_ref.document(name)
@@ -377,11 +375,11 @@ class FirebaseDataManager:
                     }
 
                 problem_data = problems.get(problem_id_str, {})
-                best_result = problem_data.get('best_result', {})
-                if not best_result or not best_result.get('all_passed', False):
+                submissions = problem_data.get('submissions', [])
+                if not submissions:
                     return {
                         'success': False,
-                        'message': 'Only solved problems can be reviewed'
+                        'message': 'Only submitted problems can be reviewed'
                     }
 
                 review_status = self._normalize_review_status(problem_data)
@@ -622,11 +620,11 @@ class FirebaseDataManager:
                     }
 
                 problem_data = problems.get(problem_id_str, {})
-                best_result = problem_data.get('best_result', {})
-                if not best_result or not best_result.get('all_passed', False):
+                submissions = problem_data.get('submissions', [])
+                if not submissions:
                     return {
                         'success': False,
-                        'message': 'Only solved problems can be reviewed'
+                        'message': 'Only submitted problems can be reviewed'
                     }
 
                 review_status = self._normalize_review_status(problem_data)

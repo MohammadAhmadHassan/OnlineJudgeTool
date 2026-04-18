@@ -120,16 +120,15 @@ class CompetitionDataManager:
         if current_best is None or submission["passed_tests"] > current_best.get("passed_tests", 0):
             problem_data["best_result"] = submission
 
-        # A newly solved submission should always return to the review queue.
-        if submission["all_passed"]:
-            problem_data["judge_approval"] = "pending"
-            problem_data["judge_approval_time"] = None
-            problem_data["review_status"] = "pending_review"
-            problem_data["review_requested_at"] = submission["submitted_at"]
-            problem_data["review_locked_by"] = None
-            problem_data["review_locked_at"] = None
-            problem_data["review_completed_at"] = None
-            problem_data["review_completed_by"] = None
+        # Any new submission should return to the review queue.
+        problem_data["judge_approval"] = "pending"
+        problem_data["judge_approval_time"] = None
+        problem_data["review_status"] = "pending_review"
+        problem_data["review_requested_at"] = submission["submitted_at"]
+        problem_data["review_locked_by"] = None
+        problem_data["review_locked_at"] = None
+        problem_data["review_completed_at"] = None
+        problem_data["review_completed_by"] = None
         
         data["competitors"][name]["last_activity"] = datetime.now().isoformat()
         self.save_data(data)
@@ -145,24 +144,22 @@ class CompetitionDataManager:
         if judge_approval in ["approved", "rejected"]:
             return "reviewed"
 
-        best_result = problem_data.get("best_result", {})
-        if best_result and best_result.get("all_passed", False):
+        if problem_data.get("submissions", []):
             return "pending_review"
 
         return "not_ready"
 
     def get_review_queue(self) -> List[dict]:
-        """Return all solved problems as review queue entries."""
+        """Return all submitted problems as review queue entries."""
         data = self.load_data()
         queue = []
 
         for competitor_name, competitor_data in data.get("competitors", {}).items():
             for problem_id, problem_data in competitor_data.get("problems", {}).items():
-                best_result = problem_data.get("best_result", {})
-                if not best_result or not best_result.get("all_passed", False):
+                submissions = problem_data.get("submissions", [])
+                if not submissions:
                     continue
 
-                submissions = problem_data.get("submissions", [])
                 latest_submission = submissions[-1] if submissions else {}
                 queue.append({
                     "competitor": competitor_name,
@@ -174,8 +171,9 @@ class CompetitionDataManager:
                     "reviewed_at": problem_data.get("review_completed_at") or problem_data.get("judge_approval_time"),
                     "submitted_at": latest_submission.get("submitted_at", latest_submission.get("timestamp")),
                     "attempts": len(submissions),
-                    "passed_tests": best_result.get("passed_tests", 0),
-                    "total_tests": best_result.get("total_tests", 0),
+                    "passed_tests": latest_submission.get("passed_tests", latest_submission.get("tests_passed", 0)),
+                    "total_tests": latest_submission.get("total_tests", 0),
+                    "all_passed": latest_submission.get("all_passed", False),
                     "level": competitor_data.get("level"),
                     "week": competitor_data.get("week")
                 })
@@ -201,7 +199,7 @@ class CompetitionDataManager:
         return queue
 
     def start_problem_review(self, name: str, problem_id: int, judge_id: str) -> dict:
-        """Lock a solved problem for review so only one judge can access it."""
+        """Lock a submitted problem for review so only one judge can access it."""
         try:
             with self.lock:
                 data = self.load_data()
@@ -221,11 +219,11 @@ class CompetitionDataManager:
                     }
 
                 problem_data = problems[problem_id_str]
-                best_result = problem_data.get("best_result", {})
-                if not best_result or not best_result.get("all_passed", False):
+                submissions = problem_data.get("submissions", [])
+                if not submissions:
                     return {
                         "success": False,
-                        "message": "Only solved problems can be reviewed"
+                        "message": "Only submitted problems can be reviewed"
                     }
 
                 review_status = self._normalize_review_status(problem_data)

@@ -266,6 +266,9 @@ def render_approval_chip(approval):
     return '<span class="status-chip status-pending">Pending Decision</span>'
 
 
+queue_entries = get_review_queue_entries()
+
+
 with st.sidebar:
     st.markdown("### Judge Session")
     judge_name_input = st.text_input(
@@ -317,6 +320,18 @@ with st.sidebar:
         options=["All", 1, 2, 3, 4, 5, 6, 7, 8],
         index=0,
     )
+
+    locked_by_names = sorted({
+        entry.get("locked_by")
+        for entry in queue_entries
+        if entry.get("locked_by")
+    })
+    locked_by_filter = st.selectbox(
+        "Locked By",
+        options=["All", "Unlocked", "Locked (Any)", "Locked By Me"] + locked_by_names,
+        index=0,
+    )
+
     search_query = st.text_input("Search Student / Problem", "").strip().lower()
 
     st.markdown("---")
@@ -343,11 +358,9 @@ if auto_refresh:
 
 st.title("Judge Review Queue")
 st.caption(
-    "Solved submissions appear in this queue with status Pending Review. "
+    "Submitted solutions appear in this queue with status Pending Review. "
     "Opening one moves it to Under Review and locks it to the active judge."
 )
-
-queue_entries = get_review_queue_entries()
 
 pending_count = sum(1 for entry in queue_entries if entry["review_status"] == "pending_review")
 under_review_count = sum(1 for entry in queue_entries if entry["review_status"] == "under_review")
@@ -362,6 +375,19 @@ metric_col4.metric("Reviewed", reviewed_count)
 filtered_entries = []
 for entry in queue_entries:
     if status_filter_set and entry["review_status"] not in status_filter_set:
+        continue
+
+    entry_lock_owner = entry.get("locked_by")
+    if locked_by_filter == "Unlocked" and entry_lock_owner:
+        continue
+    if locked_by_filter == "Locked (Any)" and not entry_lock_owner:
+        continue
+    if locked_by_filter == "Locked By Me" and entry_lock_owner != st.session_state.judge_name:
+        continue
+    if (
+        locked_by_filter not in ["All", "Unlocked", "Locked (Any)", "Locked By Me"]
+        and entry_lock_owner != locked_by_filter
+    ):
         continue
 
     if level_filter != "All" and entry.get("level") != level_filter:
