@@ -182,6 +182,41 @@ def get_review_queue_entries():
     return normalize_queue_entries(raw_entries)
 
 
+def get_selected_rows_from_table(table_event, widget_key):
+    """Read selected rows from dataframe event and widget session state."""
+    rows = []
+
+    try:
+        rows = list(table_event.selection.rows)
+    except Exception:
+        rows = []
+
+    if rows:
+        return rows
+
+    table_state = st.session_state.get(widget_key)
+    if table_state is None:
+        return []
+
+    try:
+        rows = list(table_state.selection.rows)
+    except Exception:
+        rows = []
+
+    if rows:
+        return rows
+
+    if isinstance(table_state, dict):
+        selection_state = table_state.get("selection", {})
+        rows = selection_state.get("rows", []) or []
+        try:
+            return list(rows)
+        except Exception:
+            return []
+
+    return []
+
+
 def get_problem_payload(competitor_name, problem_id):
     competitor_data = data_manager.get_competitor_data(competitor_name)
     if not competitor_data:
@@ -293,13 +328,13 @@ with st.sidebar:
             st.warning("Click again to confirm reset")
 
 
+pending_auto_refresh = False
 if auto_refresh:
+    now = time.time()
     if "last_refresh" not in st.session_state:
-        st.session_state.last_refresh = time.time()
-
-    if time.time() - st.session_state.last_refresh >= 5:
-        st.session_state.last_refresh = time.time()
-        st.rerun()
+        st.session_state.last_refresh = now
+    elif now - st.session_state.last_refresh >= 5:
+        pending_auto_refresh = True
 
 
 st.title("Judge Review Queue")
@@ -371,9 +406,11 @@ with left_col:
             key="review_queue_table",
         )
 
-        if selection and selection.selection.rows:
-            selected_index = selection.selection.rows[0]
-            st.session_state.selected_review_entry = filtered_entries[selected_index]["entry_key"]
+        selected_rows = get_selected_rows_from_table(selection, "review_queue_table")
+        if selected_rows:
+            selected_index = selected_rows[0]
+            if 0 <= selected_index < len(filtered_entries):
+                st.session_state.selected_review_entry = filtered_entries[selected_index]["entry_key"]
 
         if "selected_review_entry" not in st.session_state and filtered_entries:
             st.session_state.selected_review_entry = filtered_entries[0]["entry_key"]
@@ -506,3 +543,7 @@ with right_col:
 
 st.markdown("---")
 st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+if pending_auto_refresh:
+    st.session_state.last_refresh = time.time()
+    st.rerun()
