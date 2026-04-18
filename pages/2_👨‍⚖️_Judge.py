@@ -164,13 +164,8 @@ def normalize_queue_entries(raw_entries):
         except Exception:
             return 0.0
 
-    # Keep queue sorted by status first and most recent submissions first.
-    entries.sort(
-        key=lambda item: (
-            STATUS_ORDER.get(item.get("review_status"), 99),
-            -submitted_epoch(item),
-        )
-    )
+    # Keep queue order stable to avoid row-index drift after status changes.
+    entries.sort(key=lambda item: (-submitted_epoch(item), str(item.get("entry_key"))))
     return entries
 
 
@@ -339,9 +334,10 @@ with st.sidebar:
 pending_auto_refresh = False
 if auto_refresh:
     now = time.time()
+    is_actively_reviewing = bool(st.session_state.get("active_review_entry"))
     if "last_refresh" not in st.session_state:
         st.session_state.last_refresh = now
-    elif now - st.session_state.last_refresh >= 5:
+    elif (not is_actively_reviewing) and now - st.session_state.last_refresh >= 5:
         pending_auto_refresh = True
 
 
@@ -387,6 +383,7 @@ left_col, right_col = st.columns([2.2, 2.8])
 
 with left_col:
     st.subheader("Submission Queue")
+    freeze_table_selection = bool(st.session_state.pop("freeze_table_selection_once", False))
 
     if not filtered_entries:
         st.info("No queue entries match the current filters.")
@@ -415,7 +412,7 @@ with left_col:
         )
 
         event_rows = get_selected_rows_from_table_event(selection)
-        if event_rows:
+        if event_rows and not freeze_table_selection:
             selected_index = event_rows[0]
             if 0 <= selected_index < len(filtered_entries):
                 st.session_state.selected_review_entry = filtered_entries[selected_index]["entry_key"]
@@ -527,6 +524,8 @@ with right_col:
 
                 if success:
                     st.session_state.active_review_entry = entry_key
+                    st.session_state.selected_review_entry = entry_key
+                    st.session_state.freeze_table_selection_once = True
                     st.success(message or "Submission locked for your review")
                 else:
                     st.error(message or "Unable to open this entry for review")
@@ -557,6 +556,8 @@ with right_col:
                     if approved:
                         if st.session_state.get("active_review_entry") == entry_key:
                             st.session_state.pop("active_review_entry", None)
+                        st.session_state.selected_review_entry = entry_key
+                        st.session_state.freeze_table_selection_once = True
                         st.success("Submission marked as reviewed and approved")
                     else:
                         st.error("Failed to approve this submission")
@@ -577,6 +578,8 @@ with right_col:
                     if rejected:
                         if st.session_state.get("active_review_entry") == entry_key:
                             st.session_state.pop("active_review_entry", None)
+                        st.session_state.selected_review_entry = entry_key
+                        st.session_state.freeze_table_selection_once = True
                         st.warning("Submission marked as reviewed and rejected")
                     else:
                         st.error("Failed to reject this submission")
