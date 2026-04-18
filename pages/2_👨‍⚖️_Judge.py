@@ -182,29 +182,19 @@ def get_review_queue_entries():
     return normalize_queue_entries(raw_entries)
 
 
-def get_selected_rows_from_table(table_event, widget_key):
-    """Read selected rows from dataframe event and widget session state."""
-    rows = []
-
+def get_selected_rows_from_table_event(table_event):
+    """Read selected rows only from the current dataframe selection event."""
     try:
-        rows = list(table_event.selection.rows)
+        return list(table_event.selection.rows)
     except Exception:
-        rows = []
+        return []
 
-    if rows:
-        return rows
 
+def get_selected_rows_from_table_state(widget_key):
+    """Read selected rows from persisted widget state (no new selection event)."""
     table_state = st.session_state.get(widget_key)
     if table_state is None:
         return []
-
-    try:
-        rows = list(table_state.selection.rows)
-    except Exception:
-        rows = []
-
-    if rows:
-        return rows
 
     if isinstance(table_state, dict):
         selection_state = table_state.get("selection", {})
@@ -214,7 +204,25 @@ def get_selected_rows_from_table(table_event, widget_key):
         except Exception:
             return []
 
-    return []
+    try:
+        return list(table_state.selection.rows)
+    except Exception:
+        return []
+
+
+def split_entry_key(entry_key):
+    if not entry_key or "::" not in str(entry_key):
+        return None, None
+
+    competitor_name, raw_problem_id = str(entry_key).split("::", 1)
+    if str(raw_problem_id).isdigit():
+        return competitor_name, int(raw_problem_id)
+    return competitor_name, raw_problem_id
+
+
+def entry_widget_key(prefix, entry_key):
+    token = str(entry_key).replace("::", "__").replace(" ", "_")
+    return f"{prefix}_{token}"
 
 
 def get_problem_payload(competitor_name, problem_id):
@@ -406,29 +414,59 @@ with left_col:
             key="review_queue_table",
         )
 
-        selected_rows = get_selected_rows_from_table(selection, "review_queue_table")
-        if selected_rows:
-            selected_index = selected_rows[0]
+        event_rows = get_selected_rows_from_table_event(selection)
+        if event_rows:
+            selected_index = event_rows[0]
             if 0 <= selected_index < len(filtered_entries):
                 st.session_state.selected_review_entry = filtered_entries[selected_index]["entry_key"]
-
-        if "selected_review_entry" not in st.session_state and filtered_entries:
-            st.session_state.selected_review_entry = filtered_entries[0]["entry_key"]
+        elif "selected_review_entry" not in st.session_state and filtered_entries:
+            persisted_rows = get_selected_rows_from_table_state("review_queue_table")
+            if persisted_rows:
+                selected_index = persisted_rows[0]
+                if 0 <= selected_index < len(filtered_entries):
+                    st.session_state.selected_review_entry = filtered_entries[selected_index]["entry_key"]
+                else:
+                    st.session_state.selected_review_entry = filtered_entries[0]["entry_key"]
+            else:
+                st.session_state.selected_review_entry = filtered_entries[0]["entry_key"]
 
 with right_col:
     st.subheader("Review Panel")
 
+    judge_name = st.session_state.judge_name
     selected_key = st.session_state.get("selected_review_entry")
+    if not selected_key:
+        selected_key = st.session_state.get("active_review_entry")
+
     selected_entry = None
     if selected_key:
         selected_entry = next((item for item in queue_entries if item["entry_key"] == selected_key), None)
+
+    if not selected_entry and selected_key:
+        fallback_competitor, fallback_problem_id = split_entry_key(selected_key)
+        if fallback_competitor is not None and fallback_problem_id is not None:
+            selected_entry = {
+                "entry_key": selected_key,
+                "competitor": fallback_competitor,
+                "problem_id": fallback_problem_id,
+                "review_status": "under_review" if st.session_state.get("active_review_entry") == selected_key else "pending_review",
+                "judge_approval": "pending",
+                "locked_by": judge_name if st.session_state.get("active_review_entry") == selected_key else None,
+                "locked_at": None,
+                "reviewed_at": None,
+                "submitted_at": None,
+                "attempts": 0,
+                "passed_tests": 0,
+                "total_tests": 0,
+                "level": None,
+                "week": None,
+            }
 
     if not selected_entry:
         st.info("Select a queue entry to review.")
     else:
         competitor_name = selected_entry["competitor"]
         problem_id = selected_entry["problem_id"]
-        judge_name = st.session_state.judge_name
         entry_key = selected_entry["entry_key"]
 
         _, problem_data, submissions, latest_submission = get_problem_payload(competitor_name, problem_id)
@@ -469,7 +507,12 @@ with right_col:
         )
 
         if can_open:
-            if st.button("Open For Review", type="primary", use_container_width=True):
+            if st.button(
+                "Open For Review",
+                type="primary",
+                use_container_width=True,
+                key=entry_widget_key("open", entry_key),
+            ):
                 lock_result = data_manager.start_problem_review(
                     competitor_name,
                     to_write_problem_id(problem_id),
@@ -499,7 +542,12 @@ with right_col:
             action_col1, action_col2 = st.columns(2)
 
             with action_col1:
-                if st.button("Approve", type="primary", use_container_width=True):
+                if st.button(
+                    "Approve",
+                    type="primary",
+                    use_container_width=True,
+                    key=entry_widget_key("approve", entry_key),
+                ):
                     approved = data_manager.set_judge_approval(
                         competitor_name,
                         to_write_problem_id(problem_id),
@@ -515,7 +563,11 @@ with right_col:
                     st.rerun()
 
             with action_col2:
-                if st.button("Reject", use_container_width=True):
+                if st.button(
+                    "Reject",
+                    use_container_width=True,
+                    key=entry_widget_key("reject", entry_key),
+                ):
                     rejected = data_manager.set_judge_approval(
                         competitor_name,
                         to_write_problem_id(problem_id),
