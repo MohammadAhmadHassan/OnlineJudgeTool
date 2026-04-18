@@ -429,6 +429,7 @@ with right_col:
         competitor_name = selected_entry["competitor"]
         problem_id = selected_entry["problem_id"]
         judge_name = st.session_state.judge_name
+        entry_key = selected_entry["entry_key"]
 
         _, problem_data, submissions, latest_submission = get_problem_payload(competitor_name, problem_id)
         if not problem_data:
@@ -436,8 +437,13 @@ with right_col:
             st.stop()
 
         current_status = normalize_review_status(problem_data)
+        queue_status = selected_entry.get("review_status")
+        if STATUS_ORDER.get(queue_status, -1) > STATUS_ORDER.get(current_status, -1):
+            current_status = queue_status
+
         current_approval = problem_data.get("judge_approval", "pending")
-        lock_owner = problem_data.get("review_locked_by")
+        lock_owner = problem_data.get("review_locked_by") or selected_entry.get("locked_by")
+        active_review_entry = st.session_state.get("active_review_entry")
 
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown(f"### {competitor_name} - Problem {problem_id}")
@@ -452,8 +458,15 @@ with right_col:
         meta_col3.markdown(f"**Tests Passed:** {latest_submission.get('passed_tests', latest_submission.get('tests_passed', 0))}/{latest_submission.get('total_tests', 0)}")
 
         can_open = current_status == "pending_review"
-        mine_under_review = current_status == "under_review" and lock_owner == judge_name
-        locked_by_other = current_status == "under_review" and lock_owner and lock_owner != judge_name
+        mine_under_review = current_status == "under_review" and (
+            lock_owner == judge_name or active_review_entry == entry_key
+        )
+        locked_by_other = (
+            current_status == "under_review"
+            and lock_owner
+            and lock_owner != judge_name
+            and active_review_entry != entry_key
+        )
 
         if can_open:
             if st.button("Open For Review", type="primary", use_container_width=True):
@@ -470,6 +483,7 @@ with right_col:
                     message = lock_result.get("message", "")
 
                 if success:
+                    st.session_state.active_review_entry = entry_key
                     st.success(message or "Submission locked for your review")
                 else:
                     st.error(message or "Unable to open this entry for review")
@@ -493,6 +507,8 @@ with right_col:
                         judge_id=judge_name,
                     )
                     if approved:
+                        if st.session_state.get("active_review_entry") == entry_key:
+                            st.session_state.pop("active_review_entry", None)
                         st.success("Submission marked as reviewed and approved")
                     else:
                         st.error("Failed to approve this submission")
@@ -507,17 +523,25 @@ with right_col:
                         judge_id=judge_name,
                     )
                     if rejected:
+                        if st.session_state.get("active_review_entry") == entry_key:
+                            st.session_state.pop("active_review_entry", None)
                         st.warning("Submission marked as reviewed and rejected")
                     else:
                         st.error("Failed to reject this submission")
                     st.rerun()
 
         if current_status == "reviewed":
+            if st.session_state.get("active_review_entry") == entry_key:
+                st.session_state.pop("active_review_entry", None)
             reviewed_by = problem_data.get("review_completed_by") or "-"
             reviewed_at = format_timestamp(problem_data.get("review_completed_at") or problem_data.get("judge_approval_time"))
             st.info(f"Reviewed by {reviewed_by} at {reviewed_at}")
 
-        can_view_code = mine_under_review or current_status == "reviewed"
+        can_view_code = (
+            mine_under_review
+            or current_status == "reviewed"
+            or (active_review_entry == entry_key and current_status in ["pending_review", "under_review"])
+        )
         if can_view_code:
             code = latest_submission.get("code", "No code available")
             st.markdown("**Latest Submitted Code**")
