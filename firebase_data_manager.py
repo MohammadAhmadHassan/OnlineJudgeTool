@@ -238,7 +238,14 @@ class FirebaseDataManager:
                     'submissions': [],
                     'best_result': None,
                     'judge_approval': 'pending',  # Initialize approval status
-                    'judge_approval_time': None
+                    'judge_approval_time': None,
+                    'review_status': None,
+                    'review_requested_at': None,
+                    'review_locked_by': None,
+                    'review_locked_at': None,
+                    'review_completed_at': None,
+                    'review_completed_by': None,
+                    'review_last_opened_at': None
                 }
             
             # Add submission
@@ -248,6 +255,17 @@ class FirebaseDataManager:
             current_best = problems[problem_key]['best_result']
             if current_best is None or submission['passed_tests'] > current_best.get('passed_tests', 0):
                 problems[problem_key]['best_result'] = submission
+
+            # A solved submission enters the shared review queue.
+            if submission['all_passed']:
+                problems[problem_key]['judge_approval'] = 'pending'
+                problems[problem_key]['judge_approval_time'] = None
+                problems[problem_key]['review_status'] = 'pending_review'
+                problems[problem_key]['review_requested_at'] = submission['submitted_at']
+                problems[problem_key]['review_locked_by'] = None
+                problems[problem_key]['review_locked_at'] = None
+                problems[problem_key]['review_completed_at'] = None
+                problems[problem_key]['review_completed_by'] = None
             
             # Update document
             doc_ref.update({
@@ -264,6 +282,156 @@ class FirebaseDataManager:
         except Exception as e:
             print(f"Error submitting solution: {e}")
             return False
+
+    def _normalize_review_status(self, problem_data: dict) -> str:
+        """Normalize review status across old and new schemas."""
+        explicit_status = problem_data.get('review_status')
+        if explicit_status in ['pending_review', 'under_review', 'reviewed']:
+            return explicit_status
+
+        judge_approval = problem_data.get('judge_approval')
+        if judge_approval in ['approved', 'rejected']:
+            return 'reviewed'
+
+        best_result = problem_data.get('best_result', {})
+        if best_result and best_result.get('all_passed', False):
+            return 'pending_review'
+
+        return 'not_ready'
+
+    def get_review_queue(self) -> List[dict]:
+        """Return all solved problems as review queue entries."""
+        try:
+            competitors = self.get_all_competitors()
+            queue = []
+
+            for competitor_name, competitor_data in competitors.items():
+                for problem_id, problem_data in competitor_data.get('problems', {}).items():
+                    best_result = problem_data.get('best_result', {})
+                    if not best_result or not best_result.get('all_passed', False):
+                        continue
+
+                    submissions = problem_data.get('submissions', [])
+                    latest_submission = submissions[-1] if submissions else {}
+                    queue.append({
+                        'competitor': competitor_name,
+                        'problem_id': int(problem_id) if str(problem_id).isdigit() else problem_id,
+                        'review_status': self._normalize_review_status(problem_data),
+                        'judge_approval': problem_data.get('judge_approval', 'pending'),
+                        'locked_by': problem_data.get('review_locked_by'),
+                        'locked_at': problem_data.get('review_locked_at'),
+                        'reviewed_at': problem_data.get('review_completed_at') or problem_data.get('judge_approval_time'),
+                        'submitted_at': latest_submission.get('submitted_at', latest_submission.get('timestamp')),
+                        'attempts': len(submissions),
+                        'passed_tests': best_result.get('passed_tests', 0),
+                        'total_tests': best_result.get('total_tests', 0),
+                        'level': competitor_data.get('level'),
+                        'week': competitor_data.get('week')
+                    })
+
+            status_order = {
+                'pending_review': 0,
+                'under_review': 1,
+                'reviewed': 2
+            }
+
+            def sort_timestamp(entry):
+                timestamp = entry.get('submitted_at')
+                if not timestamp:
+                    return 0.0
+                try:
+                    parsed = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+                    return parsed.timestamp()
+                except Exception:
+                    return 0.0
+
+            queue.sort(key=sort_timestamp, reverse=True)
+            queue.sort(key=lambda entry: status_order.get(entry.get('review_status'), 99))
+            return queue
+        except Exception as e:
+            print(f"Error getting review queue: {e}")
+            return []
+
+    def start_problem_review(self, name: str, problem_id: int, judge_id: str) -> dict:
+        """Lock a solved problem for review so only one judge can access it."""
+        try:
+            problem_id_str = str(problem_id)
+            doc_ref = self.competitors_ref.document(name)
+            transaction = self.db.transaction()
+
+            @firestore.transactional
+            def _lock_for_review(transaction, competitor_ref):
+                snapshot = competitor_ref.get(transaction=transaction)
+                if not snapshot.exists:
+                    return {
+                        'success': False,
+                        'message': f'Competitor {name} not found'
+                    }
+
+                competitor_data = snapshot.to_dict()
+                problems = competitor_data.get('problems', {})
+                if problem_id_str not in problems:
+                    return {
+                        'success': False,
+                        'message': f'Problem {problem_id} not found for {name}'
+                    }
+
+                problem_data = problems.get(problem_id_str, {})
+                best_result = problem_data.get('best_result', {})
+                if not best_result or not best_result.get('all_passed', False):
+                    return {
+                        'success': False,
+                        'message': 'Only solved problems can be reviewed'
+                    }
+
+                review_status = self._normalize_review_status(problem_data)
+                lock_owner = problem_data.get('review_locked_by')
+
+                if review_status == 'under_review':
+                    if lock_owner == judge_id:
+                        return {
+                            'success': True,
+                            'message': 'Already assigned to you'
+                        }
+                    owner_label = lock_owner or 'another judge'
+                    return {
+                        'success': False,
+                        'message': f'This entry is currently under review by {owner_label}'
+                    }
+
+                if review_status == 'reviewed':
+                    return {
+                        'success': False,
+                        'message': 'This entry has already been reviewed'
+                    }
+
+                now = datetime.now().isoformat()
+                transaction.update(competitor_ref, {
+                    f'problems.{problem_id_str}.review_status': 'under_review',
+                    f'problems.{problem_id_str}.review_locked_by': judge_id,
+                    f'problems.{problem_id_str}.review_locked_at': now,
+                    f'problems.{problem_id_str}.review_last_opened_at': now
+                })
+
+                return {
+                    'success': True,
+                    'message': 'Submission moved to under review'
+                }
+
+            result = _lock_for_review(transaction, doc_ref)
+
+            if result.get('success'):
+                self._invalidate_cache(f'competitor_{name}')
+                self._invalidate_cache('all_competitors')
+                self._invalidate_cache('leaderboard')
+
+            return result
+        except Exception as e:
+            print(f"Error starting problem review: {e}")
+            return {
+                'success': False,
+                'message': 'Failed to lock submission for review'
+            }
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor with caching"""
@@ -429,74 +597,78 @@ class FirebaseDataManager:
         except Exception as e:
             print(f"Error resetting competition: {e}")
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str):
-        """Set judge approval status for a problem (approved/rejected)"""
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
+        """Finalize judge decision and mark review lifecycle as reviewed."""
         try:
             problem_id_str = str(problem_id)
-            print(f"[DEBUG] Setting judge approval: name={name}, problem_id={problem_id} (str: {problem_id_str}), status={status}")
-            
             doc_ref = self.competitors_ref.document(name)
-            
-            # Get current data and update it
-            doc = doc_ref.get()
-            if not doc.exists:
-                print(f"[ERROR] Competitor {name} not found in database")
-                return False
-            
-            data = doc.to_dict()
-            problems = data.get('problems', {})
-            
-            print(f"[DEBUG] Available problems for {name}: {list(problems.keys())}")
-            
-            if problem_id_str not in problems:
-                print(f"[WARNING] Problem {problem_id_str} not found for {name}. Available problems: {list(problems.keys())}")
-                return False
-            
-            print(f"[DEBUG] Current problem data: {problems.get(problem_id_str, {}).keys()}")
-            
-            # Check if judge_approval field exists, if not we need to create it first
-            current_approval = problems.get(problem_id_str, {}).get('judge_approval')
-            if current_approval is None:
-                print(f"[INFO] judge_approval field doesn't exist, creating it...")
-            
-            # Update using Firestore field path notation for nested updates
-            # This ensures the update is properly written to Firestore
-            update_dict = {
-                f'problems.{problem_id_str}.judge_approval': status,
-                f'problems.{problem_id_str}.judge_approval_time': datetime.now().isoformat()
-            }
-            
-            print(f"[DEBUG] Attempting to update with: {update_dict}")
-            
-            # Perform the update
-            doc_ref.update(update_dict)
-            
-            print(f"[OK] Firestore update completed for {name} - Problem {problem_id}")
-            
-            # Verify the update by reading back
-            import time
-            time.sleep(0.5)  # Small delay to ensure Firestore has processed the update
-            
-            verify_doc = doc_ref.get()
-            if verify_doc.exists:
-                verify_data = verify_doc.to_dict()
-                verify_status = verify_data.get('problems', {}).get(problem_id_str, {}).get('judge_approval')
-                print(f"[VERIFY] Read back judge_approval status: {verify_status}")
-                if verify_status == status:
-                    print(f"[SUCCESS] Verification passed! Status is now {verify_status}")
-                    # Invalidate relevant caches
-                    self._invalidate_cache(f'competitor_{name}')
-                    self._invalidate_cache('all_competitors')
-                    self._invalidate_cache('leaderboard')
-                    return True
-                else:
-                    print(f"[ERROR] Verification failed! Expected {status}, got {verify_status}")
-                    print(f"[DEBUG] Full problem data after update: {verify_data.get('problems', {}).get(problem_id_str, {})}")
-                    return False
-            return True
+            transaction = self.db.transaction()
+
+            @firestore.transactional
+            def _finalize_review(transaction, competitor_ref):
+                snapshot = competitor_ref.get(transaction=transaction)
+                if not snapshot.exists:
+                    return {
+                        'success': False,
+                        'message': f'Competitor {name} not found'
+                    }
+
+                competitor_data = snapshot.to_dict()
+                problems = competitor_data.get('problems', {})
+                if problem_id_str not in problems:
+                    return {
+                        'success': False,
+                        'message': f'Problem {problem_id} not found for {name}'
+                    }
+
+                problem_data = problems.get(problem_id_str, {})
+                best_result = problem_data.get('best_result', {})
+                if not best_result or not best_result.get('all_passed', False):
+                    return {
+                        'success': False,
+                        'message': 'Only solved problems can be reviewed'
+                    }
+
+                review_status = self._normalize_review_status(problem_data)
+                lock_owner = problem_data.get('review_locked_by')
+                if review_status == 'under_review' and lock_owner and judge_id and lock_owner != judge_id:
+                    return {
+                        'success': False,
+                        'message': f'This entry is locked by {lock_owner}'
+                    }
+
+                now = datetime.now().isoformat()
+                update_dict = {
+                    f'problems.{problem_id_str}.judge_approval': status,
+                    f'problems.{problem_id_str}.judge_approval_time': now,
+                    f'problems.{problem_id_str}.review_status': 'reviewed',
+                    f'problems.{problem_id_str}.review_completed_at': now,
+                    f'problems.{problem_id_str}.review_locked_by': None,
+                    f'problems.{problem_id_str}.review_locked_at': None
+                }
+
+                if judge_id:
+                    update_dict[f'problems.{problem_id_str}.review_completed_by'] = judge_id
+                elif lock_owner:
+                    update_dict[f'problems.{problem_id_str}.review_completed_by'] = lock_owner
+
+                transaction.update(competitor_ref, update_dict)
+                return {
+                    'success': True,
+                    'message': f'Review finalized with status {status}'
+                }
+
+            result = _finalize_review(transaction, doc_ref)
+            if result.get('success'):
+                self._invalidate_cache(f'competitor_{name}')
+                self._invalidate_cache('all_competitors')
+                self._invalidate_cache('leaderboard')
+                return True
+
+            print(f"[WARNING] Failed to set judge approval: {result.get('message')}")
+            return False
         except Exception as e:
             print(f"[ERROR] Exception in set_judge_approval: {e}")
-            print(f"[ERROR] Exception type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
             return False

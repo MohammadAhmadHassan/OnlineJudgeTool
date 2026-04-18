@@ -15,7 +15,7 @@ class CompetitionDataManager:
     
     def __init__(self, data_file="competition_data.json"):
         self.data_file = data_file
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.initialize_data()
     
     def initialize_data(self):
@@ -100,19 +100,175 @@ class CompetitionDataManager:
         if str(problem_id) not in data["competitors"][name]["problems"]:
             data["competitors"][name]["problems"][str(problem_id)] = {
                 "submissions": [],
-                "best_result": None
+                "best_result": None,
+                "judge_approval": "pending",
+                "judge_approval_time": None,
+                "review_status": None,
+                "review_requested_at": None,
+                "review_locked_by": None,
+                "review_locked_at": None,
+                "review_completed_at": None,
+                "review_completed_by": None,
+                "review_last_opened_at": None
             }
         
-        data["competitors"][name]["problems"][str(problem_id)]["submissions"].append(submission)
+        problem_data = data["competitors"][name]["problems"][str(problem_id)]
+        problem_data["submissions"].append(submission)
         
         # Update best result if this is better
-        current_best = data["competitors"][name]["problems"][str(problem_id)]["best_result"]
+        current_best = problem_data["best_result"]
         if current_best is None or submission["passed_tests"] > current_best.get("passed_tests", 0):
-            data["competitors"][name]["problems"][str(problem_id)]["best_result"] = submission
+            problem_data["best_result"] = submission
+
+        # A newly solved submission should always return to the review queue.
+        if submission["all_passed"]:
+            problem_data["judge_approval"] = "pending"
+            problem_data["judge_approval_time"] = None
+            problem_data["review_status"] = "pending_review"
+            problem_data["review_requested_at"] = submission["submitted_at"]
+            problem_data["review_locked_by"] = None
+            problem_data["review_locked_at"] = None
+            problem_data["review_completed_at"] = None
+            problem_data["review_completed_by"] = None
         
         data["competitors"][name]["last_activity"] = datetime.now().isoformat()
         self.save_data(data)
         return True
+
+    def _normalize_review_status(self, problem_data: dict) -> str:
+        """Normalize review status across old and new schemas."""
+        explicit_status = problem_data.get("review_status")
+        if explicit_status in ["pending_review", "under_review", "reviewed"]:
+            return explicit_status
+
+        judge_approval = problem_data.get("judge_approval")
+        if judge_approval in ["approved", "rejected"]:
+            return "reviewed"
+
+        best_result = problem_data.get("best_result", {})
+        if best_result and best_result.get("all_passed", False):
+            return "pending_review"
+
+        return "not_ready"
+
+    def get_review_queue(self) -> List[dict]:
+        """Return all solved problems as review queue entries."""
+        data = self.load_data()
+        queue = []
+
+        for competitor_name, competitor_data in data.get("competitors", {}).items():
+            for problem_id, problem_data in competitor_data.get("problems", {}).items():
+                best_result = problem_data.get("best_result", {})
+                if not best_result or not best_result.get("all_passed", False):
+                    continue
+
+                submissions = problem_data.get("submissions", [])
+                latest_submission = submissions[-1] if submissions else {}
+                queue.append({
+                    "competitor": competitor_name,
+                    "problem_id": int(problem_id) if str(problem_id).isdigit() else problem_id,
+                    "review_status": self._normalize_review_status(problem_data),
+                    "judge_approval": problem_data.get("judge_approval", "pending"),
+                    "locked_by": problem_data.get("review_locked_by"),
+                    "locked_at": problem_data.get("review_locked_at"),
+                    "reviewed_at": problem_data.get("review_completed_at") or problem_data.get("judge_approval_time"),
+                    "submitted_at": latest_submission.get("submitted_at", latest_submission.get("timestamp")),
+                    "attempts": len(submissions),
+                    "passed_tests": best_result.get("passed_tests", 0),
+                    "total_tests": best_result.get("total_tests", 0),
+                    "level": competitor_data.get("level"),
+                    "week": competitor_data.get("week")
+                })
+
+        status_order = {
+            "pending_review": 0,
+            "under_review": 1,
+            "reviewed": 2
+        }
+
+        def sort_timestamp(entry):
+            timestamp = entry.get("submitted_at")
+            if not timestamp:
+                return 0.0
+            try:
+                parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                return parsed.timestamp()
+            except Exception:
+                return 0.0
+
+        queue.sort(key=sort_timestamp, reverse=True)
+        queue.sort(key=lambda entry: status_order.get(entry.get("review_status"), 99))
+        return queue
+
+    def start_problem_review(self, name: str, problem_id: int, judge_id: str) -> dict:
+        """Lock a solved problem for review so only one judge can access it."""
+        try:
+            with self.lock:
+                data = self.load_data()
+
+                if name not in data["competitors"]:
+                    return {
+                        "success": False,
+                        "message": f"Competitor {name} not found"
+                    }
+
+                problem_id_str = str(problem_id)
+                problems = data["competitors"][name].get("problems", {})
+                if problem_id_str not in problems:
+                    return {
+                        "success": False,
+                        "message": f"Problem {problem_id} not found for {name}"
+                    }
+
+                problem_data = problems[problem_id_str]
+                best_result = problem_data.get("best_result", {})
+                if not best_result or not best_result.get("all_passed", False):
+                    return {
+                        "success": False,
+                        "message": "Only solved problems can be reviewed"
+                    }
+
+                review_status = self._normalize_review_status(problem_data)
+                lock_owner = problem_data.get("review_locked_by")
+
+                if review_status == "under_review":
+                    if lock_owner == judge_id:
+                        return {
+                            "success": True,
+                            "message": "Already assigned to you"
+                        }
+                    owner_label = lock_owner or "another judge"
+                    return {
+                        "success": False,
+                        "message": f"This entry is currently under review by {owner_label}"
+                    }
+
+                if review_status == "reviewed":
+                    return {
+                        "success": False,
+                        "message": "This entry has already been reviewed"
+                    }
+
+                now = datetime.now().isoformat()
+                problem_data["review_status"] = "under_review"
+                problem_data["review_locked_by"] = judge_id
+                problem_data["review_locked_at"] = now
+                problem_data["review_last_opened_at"] = now
+
+                self.save_data(data)
+
+                return {
+                    "success": True,
+                    "message": "Submission moved to under review"
+                }
+        except Exception as e:
+            print(f"[ERROR] Failed to lock problem for review: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": "Failed to lock submission for review"
+            }
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor"""
@@ -197,7 +353,7 @@ class CompetitionDataManager:
         }
         self.save_data(initial_data)
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str):
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
         """Set judge approval status for a problem (approved/rejected)"""
         try:
             data = self.load_data()
@@ -214,9 +370,25 @@ class CompetitionDataManager:
             if problem_id_str not in data["competitors"][name]["problems"]:
                 print(f"[WARNING] Problem {problem_id_str} not found for {name}. Available: {list(data['competitors'][name]['problems'].keys())}")
                 return False
-            
-            data["competitors"][name]["problems"][problem_id_str]["judge_approval"] = status
-            data["competitors"][name]["problems"][problem_id_str]["judge_approval_time"] = datetime.now().isoformat()
+
+            problem_data = data["competitors"][name]["problems"][problem_id_str]
+            review_status = self._normalize_review_status(problem_data)
+            lock_owner = problem_data.get("review_locked_by")
+            if review_status == "under_review" and lock_owner and judge_id and lock_owner != judge_id:
+                print(f"[WARNING] Problem {problem_id_str} is locked by another judge: {lock_owner}")
+                return False
+
+            now = datetime.now().isoformat()
+            problem_data["judge_approval"] = status
+            problem_data["judge_approval_time"] = now
+            problem_data["review_status"] = "reviewed"
+            problem_data["review_completed_at"] = now
+            if judge_id:
+                problem_data["review_completed_by"] = judge_id
+            elif lock_owner:
+                problem_data["review_completed_by"] = lock_owner
+            problem_data["review_locked_by"] = None
+            problem_data["review_locked_at"] = None
             
             self.save_data(data)
             print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")
