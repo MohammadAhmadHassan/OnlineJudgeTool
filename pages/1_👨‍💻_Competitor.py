@@ -102,11 +102,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize data manager per session (not globally cached to avoid blocking)
-if 'data_manager' not in st.session_state:
-    st.session_state.data_manager = create_data_manager()
+# Initialize data manager
+@st.cache_resource
+def get_data_manager():
+    return create_data_manager()
 
-data_manager = st.session_state.data_manager
+data_manager = get_data_manager()
 
 # Initialize session state
 if 'competitor_name' not in st.session_state:
@@ -137,22 +138,6 @@ def load_problems(week=None, level=None):
         # Get problems from Firebase (using cache)
         problems = get_cached_problems(week=week, level=level)
         
-        # If no problems found and not already defaulting, try week 1 level 1
-        if not problems and (week != 1 or level != 1):
-            print(f"[WARNING] No problems found for week={week}, level={level}. Defaulting to week 1, level 1")
-            problems = get_cached_problems(week=1, level=1)
-            
-            # Update session state to reflect the default
-            if problems:
-                st.session_state.user_week = 1
-                st.session_state.user_level = 1
-                st.warning("⚠️ No problems found for your assigned week/level. Showing Week 1, Level 1 problems.")
-        
-        # If still no problems, return empty dict
-        if not problems:
-            print(f"[WARNING] No problems found even for week 1, level 1")
-            return {}
-        
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():
             if 'starter_code' not in problem:
@@ -173,21 +158,6 @@ def load_problems(week=None, level=None):
         return problems
     except Exception as e:
         st.error(f"Error loading problems from Firebase: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        
-        # Try to fallback to week 1 level 1 on error
-        try:
-            print(f"[ERROR RECOVERY] Attempting to load week 1, level 1 as fallback")
-            problems = get_cached_problems(week=1, level=1)
-            if problems:
-                st.session_state.user_week = 1
-                st.session_state.user_level = 1
-                st.warning("⚠️ Error loading problems. Showing Week 1, Level 1 problems.")
-                return problems
-        except:
-            pass
-        
         return {}
 
 # Function to run code with test cases
@@ -245,64 +215,37 @@ def run_code_with_tests(code, test_cases):
             except ImportError:
                 pass
             
-            # Mock input() function for entry-level programmers
-            # Split test input into lines for multiple input() calls
-            input_lines = str(test['input']).strip().split('\n')
-            input_index = [0]  # Use list to allow modification in nested function
-            
-            def mock_input(prompt=''):
-                """Mock input function that returns test case inputs"""
-                if input_index[0] < len(input_lines):
-                    value = input_lines[input_index[0]]
-                    input_index[0] += 1
-                    return value
-                return ''  # Return empty string if no more inputs
-            
-            # Add mock input to execution environment
-            exec_globals['input'] = mock_input
-            
             # Execute the code
             with contextlib.redirect_stdout(stdout_capture):
                 exec(code, exec_globals)
             
-            # Get printed output
-            printed_output = stdout_capture.getvalue().strip()
-            
-            # Check if solution function exists
-            if 'solution' in exec_globals:
-                # Function-based solution
-                solution_func = exec_globals['solution']
-                
-                # Parse input - keep as string for most problems
-                input_val = test['input']
-                
-                # Run the function
-                if isinstance(input_val, list):
-                    # Multiple arguments
-                    output = solution_func(*input_val)
-                else:
-                    # Single argument
-                    output = solution_func(input_val)
-                
-                # Convert to string for comparison
-                output = str(output).strip()
-                
-            elif printed_output:
-                # Code uses print() instead of return (common for beginners)
-                output = printed_output
-            else:
+            # Get the solution function (assume it's named 'solution')
+            if 'solution' not in exec_globals:
                 results.append({
                     'test_num': i + 1,
                     'passed': False,
                     'input': test['input'],
                     'expected': test['output'],
-                    'output': 'Error: No output produced (no solution function or print statements)',
-                    'error': 'No output'
+                    'output': 'Error: No function named "solution" found',
+                    'error': 'Function not found'
                 })
                 continue
             
+            solution_func = exec_globals['solution']
+            
+            # Parse input - keep as string for most problems
+            input_val = test['input']
+            
+            # Run the function
+            if isinstance(input_val, list):
+                # Multiple arguments
+                output = solution_func(*input_val)
+            else:
+                # Single argument
+                output = solution_func(input_val)
+            
             # Get expected output
-            expected = str(test['output']).strip()
+            expected = test['output']
             
             # Compare output (handle both exact match and string comparison)
             passed = (output == expected) or (str(output).strip() == str(expected).strip())
@@ -311,8 +254,8 @@ def run_code_with_tests(code, test_cases):
                 'test_num': i + 1,
                 'passed': passed,
                 'input': str(test['input']),
-                'expected': expected,
-                'output': output,
+                'expected': str(expected),
+                'output': str(output),
                 'error': None
             })
             
@@ -328,11 +271,27 @@ def run_code_with_tests(code, test_cases):
     
     return results
 
+
+def get_judge_status_badge(judge_approval, has_submission):
+    """Return HTML badge representing current judge review status."""
+    if not has_submission:
+        return None
+
+    if judge_approval == 'approved':
+        return '<span class="stat-badge badge-success">👨‍⚖️ Approved</span>'
+    if judge_approval == 'rejected':
+        return '<span class="stat-badge badge-danger">👨‍⚖️ Rejected</span>'
+    return '<span class="stat-badge badge-warning">👨‍⚖️ Pending Review</span>'
+
 # Header
 st.markdown("# 👨‍💻 Competitor Interface")
 
 # Registration/Login Section
 if st.session_state.competitor_name is None:
+    with st.sidebar:
+        st.markdown("### 👤 Competitor")
+        st.caption("Register/login from the main panel to activate your dashboard.")
+
     # Get parameters from session state (captured by streamlit_app_multi.py from URL)
     url_username = st.session_state.get('url_username', None)
     url_week = st.session_state.get('url_week', None)
@@ -394,9 +353,9 @@ if st.session_state.competitor_name is None:
                 level_int = int(url_level) if url_level else None
                 data_manager.register_competitor(url_username.strip(), week=week_int, level=level_int)
                 st.session_state.competitor_name = url_username.strip()
-                # Store week and level (convert to int if they exist)
-                st.session_state.user_week = int(url_week) if url_week else None
-                st.session_state.user_level = int(url_level) if url_level else None
+                # Store week and level
+                st.session_state.user_week = url_week
+                st.session_state.user_level = url_level
                 # Clear the URL params from session state
                 if 'url_username' in st.session_state:
                     del st.session_state.url_username
@@ -471,18 +430,12 @@ else:
             st.session_state.current_problem = None
             st.session_state.code = ""
             st.rerun()
-    
+
     # Main content
     # Load problems filtered by user's week and level
     user_week = st.session_state.get('user_week', None)
     user_level = st.session_state.get('user_level', None)
     problems = load_problems(week=user_week, level=user_level)
-    
-    # Check if no problems available
-    if not problems:
-        st.warning("⚠️ No problems are currently available.")
-        st.info("💡 Please contact the administrator to upload problems for this competition.")
-        st.stop()
     
     if st.session_state.current_problem is None:
         # Problem selection view
@@ -500,15 +453,12 @@ else:
         
     # Display problems
         for problem_id, problem in sorted(problems.items()):
-            # Reload fresh data for each problem to get latest submissions
-            fresh_comp_data = data_manager.get_competitor_data(competitor_name) or {}
-            fresh_problems_data = fresh_comp_data.get('problems', {})
-            
             # Convert problem_id to string for Firebase lookup
             problem_id_str = str(problem_id)
-            problem_data = fresh_problems_data.get(problem_id_str, {})
+            problem_data = problems_data.get(problem_id_str, {})
             best_result = problem_data.get('best_result', {})
             submissions = problem_data.get('submissions', [])
+            judge_approval = problem_data.get('judge_approval')
             
             # Apply filter
             if filter_option == "Not Attempted" and submissions:
@@ -542,6 +492,9 @@ else:
                             f'<span class="stat-badge badge-info">Attempts: {len(submissions)}</span>',
                             unsafe_allow_html=True
                         )
+                    judge_badge = get_judge_status_badge(judge_approval, bool(submissions))
+                    if judge_badge:
+                        st.markdown(judge_badge, unsafe_allow_html=True)
                     st.markdown(f"**Difficulty:** {problem.get('difficulty', 'Medium')}")
                     st.markdown(f"**Description:** {problem.get('description', 'No description')}")
                 
@@ -614,36 +567,11 @@ else:
             st.markdown(f"**Difficulty:** {problem.get('difficulty', 'Medium')}")
             st.markdown(problem.get('description', 'No description available'))
             
-            # Show input/output format if available
-            if 'input_format' in problem:
-                st.markdown(f"**Input Format:** {problem['input_format']}")
-            if 'output_format' in problem:
-                st.markdown(f"**Output Format:** {problem['output_format']}")
-            
             # Show examples
             if 'examples' in problem:
                 st.markdown("**Examples:**")
                 for i, example in enumerate(problem['examples'], 1):
                     st.code(f"Input: {example.get('input', '')}\nOutput: {example.get('output', '')}")
-        
-        # Show test cases BEFORE running
-        with st.expander("🧪 Test Cases", expanded=True):
-            st.markdown("**Your solution will be tested against these cases:**")
-            test_cases = problem.get('test_cases', [])
-            
-            if test_cases:
-                for i, test in enumerate(test_cases, 1):
-                    st.markdown(f"**Test Case {i}:**")
-                    col_input, col_output = st.columns(2)
-                    with col_input:
-                        st.markdown("**Input:**")
-                        st.code(test.get('input', ''), language="text")
-                    with col_output:
-                        st.markdown("**Expected Output:**")
-                        st.code(test.get('output', ''), language="text")
-                    st.markdown("---")
-            else:
-                st.info("No test cases available for this problem")
         
         # Code editor and testing
         col1, col2 = st.columns([3, 2])
@@ -743,14 +671,16 @@ else:
             
             # Submission history
             st.markdown("### 📜 Your Submissions")
-            # Reload fresh data to show latest submissions
-            fresh_comp_data = data_manager.get_competitor_data(competitor_name) or {}
-            fresh_problems_data = fresh_comp_data.get('problems', {})
-            
             # Convert problem_id to string for Firebase lookup
             problem_id_str = str(problem_id)
-            problem_data = fresh_problems_data.get(problem_id_str, {})
+            problem_data = problems_data.get(problem_id_str, {})
             submissions = problem_data.get('submissions', [])
+            judge_approval = problem_data.get('judge_approval')
+
+            if submissions:
+                judge_badge = get_judge_status_badge(judge_approval, True)
+                if judge_badge:
+                    st.markdown(judge_badge, unsafe_allow_html=True)
             
             # Debug info
             # if not submissions:

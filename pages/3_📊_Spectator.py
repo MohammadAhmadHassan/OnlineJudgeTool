@@ -7,6 +7,8 @@ import pandas as pd
 from datetime import datetime
 import sys
 import os
+import time
+import importlib
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -109,36 +111,52 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize data manager per session (not globally cached to avoid blocking)
-if 'data_manager' not in st.session_state:
-    st.session_state.data_manager = create_data_manager()
+# Initialize data manager
+@st.cache_resource
+def get_data_manager():
+    return create_data_manager()
 
-data_manager = st.session_state.data_manager
+data_manager = get_data_manager()
+
+DEFAULT_SPECTATOR_REFRESH_SECONDS = 3
+
+
+def get_streamlit_autorefresh_fn():
+    """Dynamically load streamlit-autorefresh if installed."""
+    try:
+        module = importlib.import_module("streamlit_autorefresh")
+        return getattr(module, "st_autorefresh", None)
+    except Exception:
+        return None
 
 # Cached data fetching functions with TTL
-@st.cache_data(ttl=3)  # Cache for 3 seconds
+@st.cache_data(ttl=1)
 def get_cached_leaderboard():
     """Get leaderboard with Streamlit caching"""
     return data_manager.get_leaderboard()
 
-@st.cache_data(ttl=3)  # Cache for 3 seconds
-def get_cached_competitors():
-    """Get all competitors with Streamlit caching"""
-    return data_manager.get_all_competitors()
+if 'spectator_refresh_seconds' not in st.session_state:
+    st.session_state.spectator_refresh_seconds = DEFAULT_SPECTATOR_REFRESH_SECONDS
 
-# Auto-refresh
-if 'last_refresh_spectator' not in st.session_state:
-    st.session_state.last_refresh_spectator = datetime.now()
+refresh_col1, refresh_col2 = st.columns([2, 3])
+with refresh_col1:
+    st.slider(
+        "Auto-refresh interval (seconds)",
+        min_value=1,
+        max_value=240,
+        key="spectator_refresh_seconds"
+    )
+with refresh_col2:
+    st.caption("Use this slider to control live refresh speed.")
 
-# Check if 3 seconds have passed
-import time
-current_time = time.time()
-if 'last_refresh_time' not in st.session_state:
-    st.session_state.last_refresh_time = current_time
+refresh_seconds = max(1, int(st.session_state.spectator_refresh_seconds))
 
-if current_time - st.session_state.last_refresh_time > 3:
-    st.session_state.last_refresh_time = current_time
-    st.rerun()
+use_blocking_refresh = False
+st_autorefresh_fn = get_streamlit_autorefresh_fn()
+if st_autorefresh_fn is not None:
+    st_autorefresh_fn(interval=refresh_seconds * 1000, key="spectator_auto_refresh")
+else:
+    use_blocking_refresh = True
 
 # Header
 st.markdown("# 📊 Live Leaderboard")
@@ -147,16 +165,11 @@ st.markdown("---")
 
 # Get leaderboard data (using cached functions)
 leaderboard = get_cached_leaderboard()
-competitors = get_cached_competitors()
 
 # Statistics
-total_competitors = len(competitors)
+total_competitors = len(leaderboard)
 total_problems_solved = sum(entry.get('problems_solved', 0) for entry in leaderboard)
-total_submissions = sum(
-    len(comp.get('problems', {}).get(pid, {}).get('submissions', []))
-    for comp in competitors.values()
-    for pid in comp.get('problems', {})
-)
+total_submissions = sum(entry.get('total_submissions', 0) for entry in leaderboard)
 
 # Stats row
 col1, col2, col3, col4 = st.columns(4)
@@ -186,7 +199,7 @@ with col3:
     """, unsafe_allow_html=True)
 
 with col4:
-    active_count = sum(1 for c in competitors.values() if c.get('current_problem'))
+    active_count = sum(1 for entry in leaderboard if entry.get('current_problem'))
     st.markdown(f"""
     <div class="stat-card-spectator" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
         <div style="font-size: 2.5rem; font-weight: 700;">{active_count}</div>
@@ -315,9 +328,9 @@ else:
 
 # Footer
 st.markdown("---")
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.caption(f"🔄 Auto-refreshing every 3 seconds | Last update: {datetime.now().strftime('%H:%M:%S')}")
-with col2:
-    if st.button("🔄 Refresh Now", type="secondary"):
-        st.rerun()
+second_label = "second" if refresh_seconds == 1 else "seconds"
+st.caption(f"🔄 Auto-refreshing every {refresh_seconds} {second_label} | Last update: {datetime.now().strftime('%H:%M:%S')}")
+
+if use_blocking_refresh:
+    time.sleep(float(refresh_seconds))
+    st.rerun()

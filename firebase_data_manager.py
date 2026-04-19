@@ -4,7 +4,6 @@ Firebase Data Manager
 Handles shared data storage using Firebase Firestore for multi-device competition system
 """
 import threading
-import time
 from datetime import datetime
 from typing import Dict, List, Optional
 import firebase_admin
@@ -31,31 +30,18 @@ class FirebaseDataManager:
         if not hasattr(self, 'initialized'):
             self.initialized = False
             self.db = None
-            self._connection_healthy = False
-            self._last_health_check = None
-            self._health_check_interval = 30  # Check every 30 seconds
-            self._max_retries = 2  # Reduced retries for faster failure
-            self._retry_delay = 0.3  # Shorter retry delay
-            self._timeout = 5  # Aggressive timeout for operations
-            self._init_timeout = 10  # Maximum time to wait for initial connection
-            self._lazy_init = False  # Flag to prevent multiple init attempts
-            self._init_in_progress = False  # Flag to track if init is running
-            
-            # Cache configuration - reduced TTL for production
+            # Cache configuration
             self._cache = {}
             self._cache_timestamps = {}
             self._cache_ttl = {
-                'all_competitors': 2,  # 2 seconds cache (reduced for real-time updates)
-                'leaderboard': 2,      # 2 seconds cache
-                'problems': 86400,     # 24 hours cache (problems never change during competition)
-                'competitor': 1,       # 1 second cache for individual competitor
-                'statistics': 3        # 3 seconds cache for stats
+                'all_competitors': 30,  # guarded by metadata version checks
+                'leaderboard': 30,      # guarded by metadata version checks
+                'problems': 3600,      # 1 hour cache (problems never change)
+                'competitor': 2,       # 2 seconds cache for individual competitor
+                'statistics': 5,       # 5 seconds cache for stats
+                'data_version': 1      # metadata version polling cache
             }
-            # Start initialization in background thread - completely non-blocking
-            print("[Firebase] Starting background initialization...")
-            import threading
-            init_thread = threading.Thread(target=self._initialize_firebase_background, daemon=True)
-            init_thread.start()
+            self._initialize_firebase()
     
     def _get_from_cache(self, cache_key: str, ttl_key: str = None):
         """Get data from cache if not expired"""
@@ -113,288 +99,114 @@ class FirebaseDataManager:
         
         return stats
     
-    def _ensure_initialized(self, max_wait=3):
-        """Wait for Firebase initialization with timeout (non-blocking)"""
-        # Check if fully initialized with all references
-        if self.initialized and hasattr(self, 'competitors_ref') and hasattr(self, 'competition_ref'):
-            return True
-        
-        # Don't wait if init is in progress - just return and let it fail gracefully
-        if self._init_in_progress:
-            print("[Firebase] Init in progress, will use cache or retry...")
-            return False
-        
-        # If not initialized and not in progress, try to start it
-        if not self._lazy_init:
-            self._lazy_init = True
-            print("[Firebase] Quick initialization attempt...")
-            import threading
-            init_thread = threading.Thread(target=self._initialize_firebase_background, daemon=True)
-            init_thread.start()
-            
-            # Wait briefly (max_wait seconds) for init to complete
-            wait_start = time.time()
-            while (time.time() - wait_start) < max_wait:
-                if self.initialized and hasattr(self, 'competitors_ref'):
-                    return True
-                time.sleep(0.1)
-            
-            return self.initialized and hasattr(self, 'competitors_ref')
-        
-        return False
-    
-    def get_health_status(self) -> dict:
-        """Get detailed health status for monitoring"""
-        return {
-            'initialized': self.initialized,
-            'connection_healthy': self._connection_healthy,
-            'last_health_check': self._last_health_check.isoformat() if self._last_health_check else None,
-            'seconds_since_check': (datetime.now() - self._last_health_check).total_seconds() if self._last_health_check else None,
-            'cache_entries': len(self._cache),
-            'timeout_setting': self._timeout,
-            'max_retries': self._max_retries
-        }
-    
-    def _initialize_firebase_background(self):
-        """Initialize Firebase in background thread (completely non-blocking)"""
-        if self.initialized or self._init_in_progress:
+    def _initialize_firebase(self):
+        """Initialize Firebase Admin SDK"""
+        if self.initialized:
             return
         
-        self._init_in_progress = True
-        print("[Firebase] Background initialization started...")
-        
         try:
-            for attempt in range(self._max_retries):
-                try:
-                    # Check if already initialized
-                    try:
-                        firebase_admin.get_app()
-                        print(f"[Firebase] Using existing Firebase app")
-                    except ValueError:
-                        # Not initialized, so initialize it
-                        creds_dict = FirebaseConfig.load_credentials()
-                        
-                        if not creds_dict:
-                            print(f"[Firebase] ERROR: No credentials found")
-                            break
-                        
-                        cred = credentials.Certificate(creds_dict)
-                        firebase_admin.initialize_app(cred)
-                        print(f"[Firebase] Initialized new Firebase app")
-                    
-                    # Get Firestore client (CRITICAL: Must succeed before marking as initialized)
-                    self.db = firestore.client()
-                    
-                    # Collection references (CRITICAL: Must be set before any operations)
-                    self.competitors_ref = self.db.collection('competitors')
-                    self.competition_ref = self.db.collection('competition')
-                    self.problems_ref = self.db.collection('problems')
-                    
-                    print(f"[Firebase] Collection references established")
-                    
-                    # Quick connection test (with very short timeout)
-                    if self._test_connection_quick():
-                        self.initialized = True
-                        self._connection_healthy = True
-                        self._last_health_check = datetime.now()
-                        print(f"[Firebase] ✅ Connection ready")
-                        
-                        # Initialize metadata in background
-                        try:
-                            self._initialize_competition_metadata()
-                        except:
-                            pass
-                        
-                        self._init_in_progress = False
-                        return
-                    else:
-                        # Connection test failed, but refs are set - still mark as partially initialized
-                        self.initialized = True
-                        print(f"[Firebase] ⚠️ Connection test failed but refs are set")
-                        self._init_in_progress = False
-                        return
-                    
-                except Exception as e:
-                    print(f"[Firebase] Init attempt {attempt + 1} failed: {str(e)[:100]}")
-                    if attempt < self._max_retries - 1:
-                        time.sleep(self._retry_delay)
-                    else:
-                        print(f"[Firebase] ⚠️ Init failed, operations will use cache")
-        
-        finally:
-            self._init_in_progress = False
-            if not self.initialized:
-                self._lazy_init = False
-    def _test_connection_quick(self):
-        """Quick connection test with aggressive timeout"""
-        # Ensure collection ref exists
-        if not hasattr(self, 'competition_ref'):
-            return False
-        
-        try:
-            doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get(timeout=3)  # Very short timeout
-            self._connection_healthy = True
-            self._last_health_check = datetime.now()
-            return True
-        except Exception as e:
-            print(f"[Firebase] Quick test failed: {str(e)[:50]}")
-            self._connection_healthy = False
-            return False
-    
-    def _test_connection(self):
-        """Test Firebase connection health"""
-        # Ensure collection ref exists
-        if not hasattr(self, 'competition_ref'):
-            self._connection_healthy = False
-            return False
-        
-        try:
-            doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get(timeout=self._timeout)
-            self._connection_healthy = True
-            self._last_health_check = datetime.now()
-            return True
-        except Exception as e:
-            print(f"[Firebase] Connection test failed: {e}")
-            self._connection_healthy = False
-            raise
-    
-    def _check_connection_health(self):
-        """Check if connection health check is needed"""
-        if self._last_health_check is None:
-            return
-        
-        time_since_check = (datetime.now() - self._last_health_check).total_seconds()
-        if time_since_check > self._health_check_interval:
-            try:
-                # Quick non-blocking test
-                self._test_connection_quick()
-            except:
-                print(f"[Firebase] Health check failed, will attempt reconnection on next operation...")
-                self._connection_healthy = False
-    
-    def _reconnect(self):
-        """Attempt to reconnect to Firebase"""
-        try:
-            print(f"[Firebase] Attempting to reconnect...")
-            self.initialized = False
-            self._lazy_init = False
-            self._init_in_progress = False
-            self.db = None
+            # Check if already initialized
+            firebase_admin.get_app()
+        except ValueError:
+            # Not initialized, so initialize it
+            creds_dict = FirebaseConfig.load_credentials()
             
-            # Start reconnection in background thread
-            import threading
-            reconnect_thread = threading.Thread(target=self._initialize_firebase_background, daemon=True)
-            reconnect_thread.start()
-        except Exception as e:
-            print(f"[Firebase] Reconnection failed: {e}")
-            self._connection_healthy = False
-    
-    def _execute_with_retry(self, operation, operation_name="operation"):
-        """Execute a Firebase operation with retry logic and timeout"""
-        # Check connection health periodically
-        self._check_connection_health()
+            if not creds_dict:
+                raise Exception(
+                    "Firebase credentials not found! Please create 'firebase_credentials.json' "
+                    "with your Firebase service account credentials.\n"
+                    "Get it from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key"
+                )
+            
+            cred = credentials.Certificate(creds_dict)
+            firebase_admin.initialize_app(cred)
         
-        for attempt in range(self._max_retries):
-            try:
-                return operation()
-            except Exception as e:
-                error_msg = str(e).lower()
-                is_retryable = any(keyword in error_msg for keyword in 
-                    ['timeout', 'connection', 'unavailable', 'deadline', 'cancelled'])
-                
-                if attempt < self._max_retries - 1 and is_retryable:
-                    wait_time = self._retry_delay * (2 ** attempt)
-                    print(f"[Firebase] {operation_name} attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    
-                    # Try to reconnect if it's a connection issue
-                    if 'connection' in error_msg:
-                        self._reconnect()
-                else:
-                    print(f"[Firebase] {operation_name} failed after {attempt + 1} attempts: {e}")
-                    raise
+        # Get Firestore client
+        self.db = firestore.client()
+        self.initialized = True
+        
+        # Collection references
+        self.competitors_ref = self.db.collection('competitors')
+        self.competition_ref = self.db.collection('competition')
+        self.problems_ref = self.db.collection('problems')
+        
+        # Initialize competition metadata if not exists
+        self._initialize_competition_metadata()
     
     def _initialize_competition_metadata(self):
-        """Initialize competition metadata document (non-blocking)"""
-        # Ensure collection ref exists
-        if not hasattr(self, 'competition_ref'):
-            print(f"[Firebase] ERROR: competition_ref not ready, cannot initialize metadata")
-            return
-        
+        """Initialize competition metadata document"""
         try:
             doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get(timeout=self._timeout)
+            doc = doc_ref.get()
             
             if not doc.exists:
                 doc_ref.set({
                     'competition_started': False,
                     'start_time': None,
                     'created_at': firestore.SERVER_TIMESTAMP,
-                    'problems_loaded': []
-                }, timeout=self._timeout)
-                print(f"[Firebase] Competition metadata initialized")
+                    'problems_loaded': [],
+                    'data_version': 0,
+                    'last_data_change': None
+                })
         except Exception as e:
-            # Don't raise - this is non-critical
-            print(f"[Firebase] Warning: Could not initialize metadata: {e}")
-    
-    def _test_connection(self):
-        """Test Firebase connection health"""
+            print(f"Error initializing competition metadata: {e}")
+
+    def _touch_data_version(self):
+        """Increment global data version to signal fresh competition data."""
         try:
             doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get(timeout=self._timeout)
-            
-            if not doc.exists:
-                doc_ref.set({
-                    'competition_started': False,
-                    'start_time': None,
-                    'created_at': firestore.SERVER_TIMESTAMP,
-                    'problems_loaded': []
-                }, timeout=self._timeout)
+            doc_ref.set({
+                'data_version': firestore.Increment(1),
+                'last_data_change': firestore.SERVER_TIMESTAMP
+            }, merge=True)
+            self._invalidate_cache('data_version')
         except Exception as e:
-            # Don't raise - this is non-critical
-            print(f"[Firebase] Warning: Could not initialize metadata: {e}")
+            print(f"Error updating data version: {e}")
+
+    def _get_data_version(self) -> int:
+        """Read global data version (cheap single-doc read, cached briefly)."""
+        try:
+            cache_key = 'data_version'
+            cached_version = self._get_from_cache(cache_key, 'data_version')
+            if cached_version is not None:
+                return int(cached_version)
+
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get()
+            version = 0
+            if doc.exists:
+                version = int((doc.to_dict() or {}).get('data_version', 0))
+
+            self._set_cache(cache_key, version)
+            return version
+        except Exception as e:
+            print(f"Error reading data version: {e}")
+            return 0
+
+    def get_data_version(self) -> int:
+        """Public accessor for current data version token."""
+        return self._get_data_version()
     
     def start_competition(self):
         """Mark competition as started"""
-        if not self._ensure_initialized(max_wait=2):
-            print("[Firebase] WARNING: Starting competition without full init")
-        
-        # Ensure collection ref exists
-        if not hasattr(self, 'competition_ref'):
-            print(f"[Firebase] ERROR: competition_ref not ready, cannot start competition")
-            return
-        
-        def operation():
+        try:
             doc_ref = self.competition_ref.document('metadata')
             doc_ref.update({
                 'competition_started': True,
                 'start_time': datetime.now().isoformat()
-            }, timeout=self._timeout)
+            })
+            self._touch_data_version()
             # Invalidate all cache
             self._invalidate_cache()
-        
-        try:
-            self._execute_with_retry(operation, "start_competition")
         except Exception as e:
-            print(f"[Firebase] Error starting competition: {e}")
+            print(f"Error starting competition: {e}")
     
     def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
-        # Try to ensure initialized but don't block for long
-        if not self._ensure_initialized(max_wait=2):
-            print(f"[Firebase] WARNING: Registering {name} without full init, will retry...")
-        
-        # Ensure collection references exist
-        if not hasattr(self, 'competitors_ref'):
-            print(f"[Firebase] ERROR: Collection refs not ready, cannot register {name}")
-            return False
-        
-        def operation():
+        try:
             # Check if competitor exists
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get(timeout=self._timeout)
+            doc = doc_ref.get()
             
             if doc.exists:
                 return False  # Competitor already exists
@@ -415,48 +227,33 @@ class FirebaseDataManager:
             if level is not None:
                 competitor_data['level'] = level
             
-            doc_ref.set(competitor_data, timeout=self._timeout)
-            self._invalidate_cache('all_competitors')
+            doc_ref.set(competitor_data)
+            self._touch_data_version()
             return True
-        
-        try:
-            return self._execute_with_retry(operation, f"register_competitor:{name}")
         except Exception as e:
-            print(f"[Firebase] Error registering competitor {name}: {e}")
+            print(f"Error registering competitor: {e}")
             return False
     
     def update_competitor_problem(self, name: str, problem_id: int):
         """Update which problem the competitor is currently viewing"""
-        # Ensure collection references exist
-        if not hasattr(self, 'competitors_ref'):
-            print(f"[Firebase] ERROR: Collection refs not ready, cannot update problem for {name}")
-            return
-        
-        def operation():
+        try:
             doc_ref = self.competitors_ref.document(name)
             doc_ref.update({
                 'current_problem': problem_id,
                 'last_activity': datetime.now().isoformat()
-            }, timeout=self._timeout)
+            })
+            self._touch_data_version()
             # Invalidate specific competitor cache
             self._invalidate_cache(f'competitor_{name}')
-        
-        try:
-            self._execute_with_retry(operation, f"update_competitor_problem:{name}")
         except Exception as e:
-            print(f"[Firebase] Error updating competitor problem for {name}: {e}")
+            print(f"Error updating competitor problem: {e}")
     
     def submit_solution(self, name: str, problem_id: int, code: str, 
                        test_results: List[dict], all_passed: bool):
         """Record a solution submission"""
-        # Ensure collection references exist
-        if not hasattr(self, 'competitors_ref'):
-            print(f"[Firebase] ERROR: Collection refs not ready, cannot submit solution for {name}")
-            return
-        
-        def operation():
+        try:
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get(timeout=self._timeout)
+            doc = doc_ref.get()
             
             if not doc.exists:
                 return False
@@ -483,7 +280,14 @@ class FirebaseDataManager:
                     'submissions': [],
                     'best_result': None,
                     'judge_approval': 'pending',  # Initialize approval status
-                    'judge_approval_time': None
+                    'judge_approval_time': None,
+                    'review_status': None,
+                    'review_requested_at': None,
+                    'review_locked_by': None,
+                    'review_locked_at': None,
+                    'review_completed_at': None,
+                    'review_completed_by': None,
+                    'review_last_opened_at': None
                 }
             
             # Add submission
@@ -493,33 +297,186 @@ class FirebaseDataManager:
             current_best = problems[problem_key]['best_result']
             if current_best is None or submission['passed_tests'] > current_best.get('passed_tests', 0):
                 problems[problem_key]['best_result'] = submission
+
+            # Any new submission should enter the shared review queue.
+            problems[problem_key]['judge_approval'] = 'pending'
+            problems[problem_key]['judge_approval_time'] = None
+            problems[problem_key]['review_status'] = 'pending_review'
+            problems[problem_key]['review_requested_at'] = submission['submitted_at']
+            problems[problem_key]['review_locked_by'] = None
+            problems[problem_key]['review_locked_at'] = None
+            problems[problem_key]['review_completed_at'] = None
+            problems[problem_key]['review_completed_by'] = None
             
             # Update document
             doc_ref.update({
                 'problems': problems,
                 'last_activity': datetime.now().isoformat()
-            }, timeout=self._timeout)
+            })
             
             # Invalidate relevant caches
             self._invalidate_cache(f'competitor_{name}')
             self._invalidate_cache('all_competitors')
             self._invalidate_cache('leaderboard')
+            self._touch_data_version()
             
             return True
-        
-        try:
-            return self._execute_with_retry(operation, f"submit_solution:{name}:{problem_id}")
         except Exception as e:
-            print(f"[Firebase] Error submitting solution for {name}: {e}")
+            print(f"Error submitting solution: {e}")
             return False
+
+    def _normalize_review_status(self, problem_data: dict) -> str:
+        """Normalize review status across old and new schemas."""
+        explicit_status = problem_data.get('review_status')
+        if explicit_status in ['pending_review', 'under_review', 'reviewed']:
+            return explicit_status
+
+        judge_approval = problem_data.get('judge_approval')
+        if judge_approval in ['approved', 'rejected']:
+            return 'reviewed'
+
+        if problem_data.get('submissions', []):
+            return 'pending_review'
+
+        return 'not_ready'
+
+    def get_review_queue(self) -> List[dict]:
+        """Return all submitted problems as review queue entries."""
+        try:
+            competitors = self.get_all_competitors()
+            queue = []
+
+            for competitor_name, competitor_data in competitors.items():
+                for problem_id, problem_data in competitor_data.get('problems', {}).items():
+                    submissions = problem_data.get('submissions', [])
+                    if not submissions:
+                        continue
+
+                    latest_submission = submissions[-1] if submissions else {}
+                    queue.append({
+                        'competitor': competitor_name,
+                        'problem_id': int(problem_id) if str(problem_id).isdigit() else problem_id,
+                        'review_status': self._normalize_review_status(problem_data),
+                        'judge_approval': problem_data.get('judge_approval', 'pending'),
+                        'locked_by': problem_data.get('review_locked_by'),
+                        'locked_at': problem_data.get('review_locked_at'),
+                        'reviewed_at': problem_data.get('review_completed_at') or problem_data.get('judge_approval_time'),
+                        'submitted_at': latest_submission.get('submitted_at', latest_submission.get('timestamp')),
+                        'attempts': len(submissions),
+                        'passed_tests': latest_submission.get('passed_tests', latest_submission.get('tests_passed', 0)),
+                        'total_tests': latest_submission.get('total_tests', 0),
+                        'all_passed': latest_submission.get('all_passed', False),
+                        'level': competitor_data.get('level'),
+                        'week': competitor_data.get('week')
+                    })
+
+            status_order = {
+                'pending_review': 0,
+                'under_review': 1,
+                'reviewed': 2
+            }
+
+            def sort_timestamp(entry):
+                timestamp = entry.get('submitted_at')
+                if not timestamp:
+                    return 0.0
+                try:
+                    parsed = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+                    return parsed.timestamp()
+                except Exception:
+                    return 0.0
+
+            queue.sort(key=sort_timestamp, reverse=True)
+            queue.sort(key=lambda entry: status_order.get(entry.get('review_status'), 99))
+            return queue
+        except Exception as e:
+            print(f"Error getting review queue: {e}")
+            return []
+
+    def start_problem_review(self, name: str, problem_id: int, judge_id: str) -> dict:
+        """Lock a submitted problem for review so only one judge can access it."""
+        try:
+            problem_id_str = str(problem_id)
+            doc_ref = self.competitors_ref.document(name)
+            transaction = self.db.transaction()
+
+            @firestore.transactional
+            def _lock_for_review(transaction, competitor_ref):
+                snapshot = competitor_ref.get(transaction=transaction)
+                if not snapshot.exists:
+                    return {
+                        'success': False,
+                        'message': f'Competitor {name} not found'
+                    }
+
+                competitor_data = snapshot.to_dict()
+                problems = competitor_data.get('problems', {})
+                if problem_id_str not in problems:
+                    return {
+                        'success': False,
+                        'message': f'Problem {problem_id} not found for {name}'
+                    }
+
+                problem_data = problems.get(problem_id_str, {})
+                submissions = problem_data.get('submissions', [])
+                if not submissions:
+                    return {
+                        'success': False,
+                        'message': 'Only submitted problems can be reviewed'
+                    }
+
+                review_status = self._normalize_review_status(problem_data)
+                lock_owner = problem_data.get('review_locked_by')
+
+                if review_status == 'under_review':
+                    if lock_owner == judge_id:
+                        return {
+                            'success': True,
+                            'message': 'Already assigned to you'
+                        }
+                    owner_label = lock_owner or 'another judge'
+                    return {
+                        'success': False,
+                        'message': f'This entry is currently under review by {owner_label}'
+                    }
+
+                if review_status == 'reviewed':
+                    return {
+                        'success': False,
+                        'message': 'This entry has already been reviewed'
+                    }
+
+                now = datetime.now().isoformat()
+                transaction.update(competitor_ref, {
+                    f'problems.{problem_id_str}.review_status': 'under_review',
+                    f'problems.{problem_id_str}.review_locked_by': judge_id,
+                    f'problems.{problem_id_str}.review_locked_at': now,
+                    f'problems.{problem_id_str}.review_last_opened_at': now
+                })
+
+                return {
+                    'success': True,
+                    'message': 'Submission moved to under review'
+                }
+
+            result = _lock_for_review(transaction, doc_ref)
+
+            if result.get('success'):
+                self._invalidate_cache(f'competitor_{name}')
+                self._invalidate_cache('all_competitors')
+                self._invalidate_cache('leaderboard')
+                self._touch_data_version()
+
+            return result
+        except Exception as e:
+            print(f"Error starting problem review: {e}")
+            return {
+                'success': False,
+                'message': 'Failed to lock submission for review'
+            }
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor with caching"""
-        # Ensure collection references exist
-        if not hasattr(self, 'competitors_ref'):
-            print(f"[Firebase] ERROR: Collection refs not ready, cannot get competitor data for {name}")
-            return None
-        
         try:
             # Check cache first
             cache_key = f'competitor_{name}'
@@ -528,71 +485,59 @@ class FirebaseDataManager:
                 return cached_data
             
             # Fetch from database
-            def operation():
-                doc_ref = self.competitors_ref.document(name)
-                doc = doc_ref.get(timeout=self._timeout)
-                
-                if doc.exists:
-                    data = doc.to_dict()
-                    # Cache the result
-                    self._set_cache(cache_key, data)
-                    return data
-                return None
+            doc_ref = self.competitors_ref.document(name)
+            doc = doc_ref.get()
             
-            return self._execute_with_retry(operation, f"get_competitor_data:{name}")
+            if doc.exists:
+                data = doc.to_dict()
+                # Cache the result
+                self._set_cache(cache_key, data)
+                return data
+            return None
         except Exception as e:
-            print(f"[Firebase] Error getting competitor data for {name}: {e}")
-            # Return cached data if available, even if expired
-            cache_key = f'competitor_{name}'
-            if cache_key in self._cache:
-                print(f"[Firebase] Returning stale cache for {name}")
-                return self._cache[cache_key]
+            print(f"Error getting competitor data: {e}")
             return None
     
     def get_all_competitors(self) -> Dict[str, dict]:
         """Get data for all competitors with caching"""
         try:
-            # Check cache first
+            # Use metadata version to avoid expensive full collection scan when unchanged.
             cache_key = 'all_competitors'
+            version_key = 'all_competitors_version'
+            current_version = self._get_data_version()
             cached_data = self._get_from_cache(cache_key, 'all_competitors')
-            if cached_data is not None:
+            cached_version = self._get_from_cache(version_key, 'all_competitors')
+
+            if cached_data is not None and cached_version is not None and int(cached_version) == int(current_version):
                 return cached_data
             
-            # Ensure Firebase is initialized with collection references
-            if not hasattr(self, 'competitors_ref'):
-                print("[Firebase] Collection refs not ready, returning empty dict")
-                return {}
-            
             # Fetch from database
-            def operation():
-                competitors = {}
-                # Use list() to fetch all at once with timeout
-                docs = list(self.competitors_ref.stream(timeout=self._timeout * 2))
-                
-                for doc in docs:
-                    competitors[doc.id] = doc.to_dict()
-                
-                # Cache the result
-                self._set_cache(cache_key, competitors)
-                return competitors
+            competitors = {}
+            docs = self.competitors_ref.stream()
             
-            return self._execute_with_retry(operation, "get_all_competitors")
+            for doc in docs:
+                competitors[doc.id] = doc.to_dict()
+            
+            # Cache the result
+            self._set_cache(cache_key, competitors)
+            self._set_cache(version_key, current_version)
+            
+            return competitors
         except Exception as e:
-            print(f"[Firebase] Error getting all competitors: {e}")
-            # Return stale cache if available
-            cache_key = 'all_competitors'
-            if cache_key in self._cache:
-                print(f"[Firebase] Returning stale cache for all_competitors")
-                return self._cache[cache_key]
+            print(f"Error getting all competitors: {e}")
             return {}
     
     def get_leaderboard(self) -> List[dict]:
         """Generate leaderboard data with caching"""
         try:
-            # Check cache first
+            # Use metadata version to avoid rebuilding leaderboard when unchanged.
             cache_key = 'leaderboard'
+            version_key = 'leaderboard_version'
+            current_version = self._get_data_version()
             cached_data = self._get_from_cache(cache_key, 'leaderboard')
-            if cached_data is not None:
+            cached_version = self._get_from_cache(version_key, 'leaderboard')
+
+            if cached_data is not None and cached_version is not None and int(cached_version) == int(current_version):
                 return cached_data
             
             competitors = self.get_all_competitors()
@@ -646,6 +591,7 @@ class FirebaseDataManager:
             
             # Cache the leaderboard
             self._set_cache('leaderboard', leaderboard)
+            self._set_cache(version_key, current_version)
             
             return leaderboard
         except Exception as e:
@@ -653,14 +599,8 @@ class FirebaseDataManager:
             return []
     
     def get_problem_statistics(self) -> dict:
-        """Get statistics for each problem with caching"""
+        """Get statistics for each problem"""
         try:
-            # Check cache first
-            cache_key = 'statistics'
-            cached_data = self._get_from_cache(cache_key, 'statistics')
-            if cached_data is not None:
-                return cached_data
-            
             competitors = self.get_all_competitors()
             stats = {}
             
@@ -681,29 +621,18 @@ class FirebaseDataManager:
                     if best_result and best_result.get('all_passed', False):
                         stats[problem_id]['total_solvers'] += 1
             
-            # Cache the result
-            self._set_cache(cache_key, stats)
             return stats
         except Exception as e:
-            print(f"[Firebase] Error getting problem statistics: {e}")
-            # Return stale cache if available
-            cache_key = 'statistics'
-            if cache_key in self._cache:
-                return  self._cache[cache_key]
+            print(f"Error getting problem statistics: {e}")
             return {}
     
     def reset_competition(self):
         """Reset all competition data"""
-        # Ensure collection references exist
-        if not hasattr(self, 'competitors_ref') or not hasattr(self, 'competition_ref'):
-            print(f"[Firebase] ERROR: Collection refs not ready, cannot reset competition")
-            return
-        
-        def operation():
+        try:
             # Delete all competitor documents
-            docs = list(self.competitors_ref.stream(timeout=self._timeout * 2))
+            docs = self.competitors_ref.stream()
             for doc in docs:
-                doc.reference.delete(timeout=self._timeout)
+                doc.reference.delete()
             
             # Reset competition metadata
             doc_ref = self.competition_ref.document('metadata')
@@ -711,101 +640,100 @@ class FirebaseDataManager:
                 'competition_started': False,
                 'start_time': None,
                 'created_at': firestore.SERVER_TIMESTAMP,
-                'problems_loaded': []
-            }, timeout=self._timeout)
+                'problems_loaded': [],
+                'data_version': 0,
+                'last_data_change': firestore.SERVER_TIMESTAMP
+            })
             
-            print("[Firebase] Competition data reset successfully")
+            print("Competition data reset successfully")
             # Clear all cache
             self._invalidate_cache()
-        
-        try:
-            self._execute_with_retry(operation, "reset_competition")
         except Exception as e:
-            print(f"[Firebase] Error resetting competition: {e}")
+            print(f"Error resetting competition: {e}")
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str):
-        """Set judge approval status for a problem (approved/rejected)"""
-        def operation():
-            problem_id_str = str(problem_id)
-            print(f"[DEBUG] Setting judge approval: name={name}, problem_id={problem_id} (str: {problem_id_str}), status={status}")
-            
-            doc_ref = self.competitors_ref.document(name)
-            
-            # Get current data and update it
-            doc = doc_ref.get(timeout=self._timeout)
-            if not doc.exists:
-                print(f"[ERROR] Competitor {name} not found in database")
-                return False
-            
-            data = doc.to_dict()
-            problems = data.get('problems', {})
-            
-            print(f"[DEBUG] Available problems for {name}: {list(problems.keys())}")
-            
-            if problem_id_str not in problems:
-                print(f"[WARNING] Problem {problem_id_str} not found for {name}. Available problems: {list(problems.keys())}")
-                return False
-            
-            print(f"[DEBUG] Current problem data: {problems.get(problem_id_str, {}).keys()}")
-            
-            # Check if judge_approval field exists, if not we need to create it first
-            current_approval = problems.get(problem_id_str, {}).get('judge_approval')
-            if current_approval is None:
-                print(f"[INFO] judge_approval field doesn't exist, creating it...")
-            
-            # Update using Firestore field path notation for nested updates
-            # This ensures the update is properly written to Firestore
-            update_dict = {
-                f'problems.{problem_id_str}.judge_approval': status,
-                f'problems.{problem_id_str}.judge_approval_time': datetime.now().isoformat()
-            }
-            
-            print(f"[DEBUG] Attempting to update with: {update_dict}")
-            
-            # Perform the update
-            doc_ref.update(update_dict, timeout=self._timeout)
-            
-            print(f"[OK] Firestore update completed for {name} - Problem {problem_id}")
-            
-            # Verify the update by reading back
-            time.sleep(0.5)  # Small delay to ensure Firestore has processed the update
-            
-            verify_doc = doc_ref.get(timeout=self._timeout)
-            if verify_doc.exists:
-                verify_data = verify_doc.to_dict()
-                verify_status = verify_data.get('problems', {}).get(problem_id_str, {}).get('judge_approval')
-                print(f"[VERIFY] Read back judge_approval status: {verify_status}")
-                if verify_status == status:
-                    print(f"[SUCCESS] Verification passed! Status is now {verify_status}")
-                    # Invalidate relevant caches
-                    self._invalidate_cache(f'competitor_{name}')
-                    self._invalidate_cache('all_competitors')
-                    self._invalidate_cache('leaderboard')
-                    return True
-                else:
-                    print(f"[ERROR] Verification failed! Expected {status}, got {verify_status}")
-                    print(f"[DEBUG] Full problem data after update: {verify_data.get('problems', {}).get(problem_id_str, {})}")
-                    return False
-            return True
-        
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
+        """Finalize judge decision and mark review lifecycle as reviewed."""
         try:
-            return self._execute_with_retry(operation, f"set_judge_approval:{name}:{problem_id}")
+            problem_id_str = str(problem_id)
+            doc_ref = self.competitors_ref.document(name)
+            transaction = self.db.transaction()
+
+            @firestore.transactional
+            def _finalize_review(transaction, competitor_ref):
+                snapshot = competitor_ref.get(transaction=transaction)
+                if not snapshot.exists:
+                    return {
+                        'success': False,
+                        'message': f'Competitor {name} not found'
+                    }
+
+                competitor_data = snapshot.to_dict()
+                problems = competitor_data.get('problems', {})
+                if problem_id_str not in problems:
+                    return {
+                        'success': False,
+                        'message': f'Problem {problem_id} not found for {name}'
+                    }
+
+                problem_data = problems.get(problem_id_str, {})
+                submissions = problem_data.get('submissions', [])
+                if not submissions:
+                    return {
+                        'success': False,
+                        'message': 'Only submitted problems can be reviewed'
+                    }
+
+                review_status = self._normalize_review_status(problem_data)
+                lock_owner = problem_data.get('review_locked_by')
+                if review_status == 'under_review' and lock_owner and judge_id and lock_owner != judge_id:
+                    return {
+                        'success': False,
+                        'message': f'This entry is locked by {lock_owner}'
+                    }
+
+                now = datetime.now().isoformat()
+                update_dict = {
+                    f'problems.{problem_id_str}.judge_approval': status,
+                    f'problems.{problem_id_str}.judge_approval_time': now,
+                    f'problems.{problem_id_str}.review_status': 'reviewed',
+                    f'problems.{problem_id_str}.review_completed_at': now,
+                    f'problems.{problem_id_str}.review_locked_by': None,
+                    f'problems.{problem_id_str}.review_locked_at': None
+                }
+
+                if judge_id:
+                    update_dict[f'problems.{problem_id_str}.review_completed_by'] = judge_id
+                elif lock_owner:
+                    update_dict[f'problems.{problem_id_str}.review_completed_by'] = lock_owner
+
+                transaction.update(competitor_ref, update_dict)
+                return {
+                    'success': True,
+                    'message': f'Review finalized with status {status}'
+                }
+
+            result = _finalize_review(transaction, doc_ref)
+            if result.get('success'):
+                self._invalidate_cache(f'competitor_{name}')
+                self._invalidate_cache('all_competitors')
+                self._invalidate_cache('leaderboard')
+                self._touch_data_version()
+                return True
+
+            print(f"[WARNING] Failed to set judge approval: {result.get('message')}")
+            return False
         except Exception as e:
-            print(f"[Firebase] Exception in set_judge_approval: {e}")
-            print(f"[Firebase] Exception type: {type(e).__name__}")
+            print(f"[ERROR] Exception in set_judge_approval: {e}")
             import traceback
             traceback.print_exc()
             return False
     
     def is_name_taken(self, name: str) -> bool:
         """Check if a competitor name is already taken"""
-        def operation():
-            doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get(timeout=self._timeout)
-            return doc.exists
-        
         try:
-            return self._execute_with_retry(operation, f"is_name_taken:{name}")
+            doc_ref = self.competitors_ref.document(name)
+            doc = doc_ref.get()
+            return doc.exists
         except Exception as e:
             print(f"Error checking name: {e}")
             return False
@@ -932,11 +860,6 @@ class FirebaseDataManager:
         Returns:
             dict: Dictionary of problems with problem_id as key
         """
-        # Ensure collection ref exists
-        if not hasattr(self, 'problems_ref'):
-            print(f"[Firebase] ERROR: problems_ref not ready, cannot get problems")
-            return {}
-        
         try:
             # Check cache first
             cache_key = f'problems_w{week}_l{level}'
@@ -1041,81 +964,26 @@ class FirebaseDataManager:
                 if doc and doc.exists:
                     data = doc.to_dict()
                     problems_list = data.get('problems', [])
-                    print(f"[DEBUG] Found {len(problems_list)} problems in {session_name}")
                     
                     # Convert list to dict and filter by level if specified
                     for problem in problems_list:
-                        # Skip if not a dict (data structure issue)
-                        if not isinstance(problem, dict):
-                            print(f"[WARNING] Skipping invalid problem data (not a dict): {type(problem)}")
-                            continue
-                        
-                        # Use existing ID or auto-generate
                         problem_id = problem.get('id')
-                        if not isinstance(problem_id, int):
-                            # If ID is string or missing, generate numeric ID
-                            problem_id = problem_counter
-                            problem['id'] = problem_id
-                        
-                        problem_counter += 1
-                        
-                        # Add level if missing
-                        if 'level' not in problem:
-                            problem['level'] = level if level else 1
-                        
-                        # Filter by level if specified
-                        if level is None or str(problem.get('level', '')) == str(level):
-                            problems[problem_id] = problem
-                else:
-                    print(f"[DEBUG] No document found for {session_name}")
+                        if problem_id:
+                            # Filter by level if specified
+                            if level is None or str(problem.get('level', '')) == str(level):
+                                problems[problem_id] = problem
             else:
                 # Fetch all sessions
                 docs = self.problems_ref.stream()
                 
                 for doc in docs:
                     data = doc.to_dict()
+                    problems_list = data.get('problems', [])
                     
-                    # Check if this is the nested "sessions" format
-                    if 'sessions' in data:
-                        sessions_data = data.get('sessions', {})
-                        # Iterate through all sessions
-                        for session_key, session_data in sessions_data.items():
-                            problems_list = session_data.get('problems', [])
-                            
-                            for problem in problems_list:
-                                if not isinstance(problem, dict):
-                                    continue
-                                
-                                problem_id = problem.get('id')
-                                if not isinstance(problem_id, int):
-                                    problem_id = problem_counter
-                                    problem['id'] = problem_id
-                                
-                                problem_counter += 1
-                                
-                                if 'level' not in problem:
-                                    problem['level'] = 1
-                                
-                                if level is None or str(problem.get('level', '')) == str(level):
-                                    problems[problem_id] = problem
-                    else:
-                        # Direct format
-                        problems_list = data.get('problems', [])
-                        
-                        for problem in problems_list:
-                            if not isinstance(problem, dict):
-                                continue
-                            
-                            problem_id = problem.get('id')
-                            if not isinstance(problem_id, int):
-                                problem_id = problem_counter
-                                problem['id'] = problem_id
-                            
-                            problem_counter += 1
-                            
-                            if 'level' not in problem:
-                                problem['level'] = 1
-                            
+                    for problem in problems_list:
+                        problem_id = problem.get('id')
+                        if problem_id:
+                            # Filter by level if specified
                             if level is None or str(problem.get('level', '')) == str(level):
                                 problems[problem_id] = problem
             
