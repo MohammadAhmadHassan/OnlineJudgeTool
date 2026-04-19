@@ -1,5 +1,6 @@
 # Streamlit Web Application Requirements
 streamlit>=1.28.0
+streamlit-autorefresh>=1.0.1
 pandas>=2.0.0
 plotly>=5.17.0
 
