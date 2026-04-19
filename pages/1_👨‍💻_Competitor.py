@@ -11,6 +11,8 @@ import os
 import io
 import contextlib
 import time
+import importlib
+import streamlit.components.v1 as components
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -290,6 +292,15 @@ def get_judge_status_badge(judge_approval, has_submission):
         return '<span class="stat-badge badge-danger">👨‍⚖️ Rejected</span>'
     return '<span class="stat-badge badge-warning">👨‍⚖️ Pending Review</span>'
 
+
+def get_streamlit_autorefresh_fn():
+    """Dynamically load streamlit-autorefresh if installed."""
+    try:
+        module = importlib.import_module("streamlit_autorefresh")
+        return getattr(module, "st_autorefresh", None)
+    except Exception:
+        return None
+
 # Header
 st.markdown("# 👨‍💻 Competitor Interface")
 
@@ -399,7 +410,6 @@ if st.session_state.competitor_name is None:
 else:
     # Competitor is logged in
     competitor_name = st.session_state.competitor_name
-    pending_auto_refresh_competitor = False
     
     # Sidebar
     with st.sidebar:
@@ -428,24 +438,6 @@ else:
         st.markdown(f"**Total Submissions:** {total_submissions}")
         
         st.markdown("---")
-
-        st.markdown("### 🔄 Live Updates")
-        st.checkbox(
-            "Auto-refresh",
-            key="auto_refresh_competitor",
-            help="Keep submission and judge status synced automatically"
-        )
-        st.slider(
-            "Refresh interval (seconds)",
-            min_value=1,
-            max_value=10,
-            key="refresh_interval_competitor"
-        )
-        if st.button("🔄 Refresh Now", use_container_width=True):
-            st.session_state.last_refresh_time_competitor = time.time()
-            st.rerun()
-
-        st.markdown("---")
         
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.competitor_name = None
@@ -453,11 +445,47 @@ else:
             st.session_state.code = ""
             st.rerun()
 
+    live_col1, live_col2, live_col3 = st.columns([1.3, 2.0, 1.0])
+    with live_col1:
+        st.toggle(
+            "Auto-refresh",
+            key="auto_refresh_competitor",
+            help="Keep submission and judge status synced automatically"
+        )
+    with live_col2:
+        st.slider(
+            "Refresh interval (seconds)",
+            min_value=1,
+            max_value=10,
+            key="refresh_interval_competitor"
+        )
+    with live_col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh Now", use_container_width=True, key="manual_refresh_competitor"):
+            st.rerun()
+
     if st.session_state.auto_refresh_competitor:
-        current_time = time.time()
-        refresh_interval = int(st.session_state.refresh_interval_competitor)
-        if current_time - st.session_state.last_refresh_time_competitor >= refresh_interval:
-            pending_auto_refresh_competitor = True
+        interval_ms = int(st.session_state.refresh_interval_competitor) * 1000
+        st_autorefresh_fn = get_streamlit_autorefresh_fn()
+        if st_autorefresh_fn is not None:
+            st_autorefresh_fn(interval=interval_ms, key="competitor_auto_refresh")
+        else:
+            # Fallback timer if streamlit-autorefresh is not installed.
+            components.html(
+                f"""
+                <script>
+                    setTimeout(function() {{
+                        if (window.parent) {{
+                            window.parent.postMessage({{type: 'streamlit:rerunScript'}}, '*');
+                        }}
+                    }}, {interval_ms});
+                </script>
+                """,
+                height=0,
+            )
+            st.caption("Install streamlit-autorefresh for best live refresh reliability.")
+
+    st.markdown("---")
     
     # Main content
     # Load problems filtered by user's week and level
@@ -745,7 +773,3 @@ else:
 # Footer
 st.markdown("---")
 st.caption("💡 Tip: Test your code before submitting to ensure all test cases pass!")
-
-if st.session_state.get('competitor_name') and 'pending_auto_refresh_competitor' in locals() and pending_auto_refresh_competitor:
-    st.session_state.last_refresh_time_competitor = time.time()
-    st.rerun()
