@@ -10,8 +10,6 @@ import sys
 import os
 import io
 import contextlib
-import time
-import importlib
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,14 +124,6 @@ if 'user_week' not in st.session_state:
     st.session_state.user_week = None
 if 'user_level' not in st.session_state:
     st.session_state.user_level = None
-if 'auto_refresh_competitor' not in st.session_state:
-    st.session_state.auto_refresh_competitor = True
-if 'refresh_interval_competitor' not in st.session_state:
-    st.session_state.refresh_interval_competitor = 1
-if 'last_refresh_time_competitor' not in st.session_state:
-    st.session_state.last_refresh_time_competitor = time.time()
-if 'blocking_refresh_interval_competitor' not in st.session_state:
-    st.session_state.blocking_refresh_interval_competitor = None
 
 # Cached problems loader
 @st.cache_data(ttl=3600)  # Cache problems for 1 hour (they never change)
@@ -293,20 +283,15 @@ def get_judge_status_badge(judge_approval, has_submission):
         return '<span class="stat-badge badge-danger">👨‍⚖️ Rejected</span>'
     return '<span class="stat-badge badge-warning">👨‍⚖️ Pending Review</span>'
 
-
-def get_streamlit_autorefresh_fn():
-    """Dynamically load streamlit-autorefresh if installed."""
-    try:
-        module = importlib.import_module("streamlit_autorefresh")
-        return getattr(module, "st_autorefresh", None)
-    except Exception:
-        return None
-
 # Header
 st.markdown("# 👨‍💻 Competitor Interface")
 
 # Registration/Login Section
 if st.session_state.competitor_name is None:
+    with st.sidebar:
+        st.markdown("### 👤 Competitor")
+        st.caption("Register/login from the main panel to activate your dashboard.")
+
     # Get parameters from session state (captured by streamlit_app_multi.py from URL)
     url_username = st.session_state.get('url_username', None)
     url_week = st.session_state.get('url_week', None)
@@ -446,40 +431,6 @@ else:
             st.session_state.code = ""
             st.rerun()
 
-    live_col1, live_col2, live_col3 = st.columns([1.3, 2.0, 1.0])
-    with live_col1:
-        st.toggle(
-            "Auto-refresh",
-            key="auto_refresh_competitor",
-            help="Keep submission and judge status synced automatically"
-        )
-    with live_col2:
-        st.slider(
-            "Refresh interval (seconds)",
-            min_value=1,
-            max_value=10,
-            key="refresh_interval_competitor"
-        )
-    with live_col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh Now", use_container_width=True, key="manual_refresh_competitor"):
-            st.rerun()
-
-    if st.session_state.auto_refresh_competitor:
-        interval_ms = int(st.session_state.refresh_interval_competitor) * 1000
-        st_autorefresh_fn = get_streamlit_autorefresh_fn()
-        if st_autorefresh_fn is not None:
-            st.session_state.blocking_refresh_interval_competitor = None
-            st_autorefresh_fn(interval=interval_ms, key="competitor_auto_refresh")
-        else:
-            # Guaranteed fallback when streamlit-autorefresh isn't installed.
-            st.session_state.blocking_refresh_interval_competitor = max(1, int(st.session_state.refresh_interval_competitor))
-            st.caption("Auto-refresh running in fallback mode.")
-    else:
-        st.session_state.blocking_refresh_interval_competitor = None
-
-    st.markdown("---")
-    
     # Main content
     # Load problems filtered by user's week and level
     user_week = st.session_state.get('user_week', None)
@@ -502,13 +453,9 @@ else:
         
     # Display problems
         for problem_id, problem in sorted(problems.items()):
-            # Reload fresh data for each problem to get latest submissions
-            fresh_comp_data = data_manager.get_competitor_data(competitor_name) or {}
-            fresh_problems_data = fresh_comp_data.get('problems', {})
-            
             # Convert problem_id to string for Firebase lookup
             problem_id_str = str(problem_id)
-            problem_data = fresh_problems_data.get(problem_id_str, {})
+            problem_data = problems_data.get(problem_id_str, {})
             best_result = problem_data.get('best_result', {})
             submissions = problem_data.get('submissions', [])
             judge_approval = problem_data.get('judge_approval')
@@ -724,13 +671,9 @@ else:
             
             # Submission history
             st.markdown("### 📜 Your Submissions")
-            # Reload fresh data to show latest submissions
-            fresh_comp_data = data_manager.get_competitor_data(competitor_name) or {}
-            fresh_problems_data = fresh_comp_data.get('problems', {})
-            
             # Convert problem_id to string for Firebase lookup
             problem_id_str = str(problem_id)
-            problem_data = fresh_problems_data.get(problem_id_str, {})
+            problem_data = problems_data.get(problem_id_str, {})
             submissions = problem_data.get('submissions', [])
             judge_approval = problem_data.get('judge_approval')
 
@@ -766,11 +709,3 @@ else:
 # Footer
 st.markdown("---")
 st.caption("💡 Tip: Test your code before submitting to ensure all test cases pass!")
-
-if (
-    st.session_state.get('competitor_name')
-    and st.session_state.get('auto_refresh_competitor')
-    and st.session_state.get('blocking_refresh_interval_competitor')
-):
-    time.sleep(float(st.session_state.blocking_refresh_interval_competitor))
-    st.rerun()

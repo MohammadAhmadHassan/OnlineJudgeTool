@@ -34,11 +34,12 @@ class FirebaseDataManager:
             self._cache = {}
             self._cache_timestamps = {}
             self._cache_ttl = {
-                'all_competitors': 3,  # 3 seconds cache
-                'leaderboard': 3,      # 3 seconds cache
+                'all_competitors': 30,  # guarded by metadata version checks
+                'leaderboard': 30,      # guarded by metadata version checks
                 'problems': 3600,      # 1 hour cache (problems never change)
                 'competitor': 2,       # 2 seconds cache for individual competitor
-                'statistics': 5        # 5 seconds cache for stats
+                'statistics': 5,       # 5 seconds cache for stats
+                'data_version': 1      # metadata version polling cache
             }
             self._initialize_firebase()
     
@@ -143,10 +144,44 @@ class FirebaseDataManager:
                     'competition_started': False,
                     'start_time': None,
                     'created_at': firestore.SERVER_TIMESTAMP,
-                    'problems_loaded': []
+                    'problems_loaded': [],
+                    'data_version': 0,
+                    'last_data_change': None
                 })
         except Exception as e:
             print(f"Error initializing competition metadata: {e}")
+
+    def _touch_data_version(self):
+        """Increment global data version to signal fresh competition data."""
+        try:
+            doc_ref = self.competition_ref.document('metadata')
+            doc_ref.set({
+                'data_version': firestore.Increment(1),
+                'last_data_change': firestore.SERVER_TIMESTAMP
+            }, merge=True)
+            self._invalidate_cache('data_version')
+        except Exception as e:
+            print(f"Error updating data version: {e}")
+
+    def _get_data_version(self) -> int:
+        """Read global data version (cheap single-doc read, cached briefly)."""
+        try:
+            cache_key = 'data_version'
+            cached_version = self._get_from_cache(cache_key, 'data_version')
+            if cached_version is not None:
+                return int(cached_version)
+
+            doc_ref = self.competition_ref.document('metadata')
+            doc = doc_ref.get()
+            version = 0
+            if doc.exists:
+                version = int((doc.to_dict() or {}).get('data_version', 0))
+
+            self._set_cache(cache_key, version)
+            return version
+        except Exception as e:
+            print(f"Error reading data version: {e}")
+            return 0
     
     def start_competition(self):
         """Mark competition as started"""
@@ -156,6 +191,7 @@ class FirebaseDataManager:
                 'competition_started': True,
                 'start_time': datetime.now().isoformat()
             })
+            self._touch_data_version()
             # Invalidate all cache
             self._invalidate_cache()
         except Exception as e:
@@ -188,6 +224,7 @@ class FirebaseDataManager:
                 competitor_data['level'] = level
             
             doc_ref.set(competitor_data)
+            self._touch_data_version()
             return True
         except Exception as e:
             print(f"Error registering competitor: {e}")
@@ -201,6 +238,7 @@ class FirebaseDataManager:
                 'current_problem': problem_id,
                 'last_activity': datetime.now().isoformat()
             })
+            self._touch_data_version()
             # Invalidate specific competitor cache
             self._invalidate_cache(f'competitor_{name}')
         except Exception as e:
@@ -276,6 +314,7 @@ class FirebaseDataManager:
             self._invalidate_cache(f'competitor_{name}')
             self._invalidate_cache('all_competitors')
             self._invalidate_cache('leaderboard')
+            self._touch_data_version()
             
             return True
         except Exception as e:
@@ -422,6 +461,7 @@ class FirebaseDataManager:
                 self._invalidate_cache(f'competitor_{name}')
                 self._invalidate_cache('all_competitors')
                 self._invalidate_cache('leaderboard')
+                self._touch_data_version()
 
             return result
         except Exception as e:
@@ -457,10 +497,14 @@ class FirebaseDataManager:
     def get_all_competitors(self) -> Dict[str, dict]:
         """Get data for all competitors with caching"""
         try:
-            # Check cache first
+            # Use metadata version to avoid expensive full collection scan when unchanged.
             cache_key = 'all_competitors'
+            version_key = 'all_competitors_version'
+            current_version = self._get_data_version()
             cached_data = self._get_from_cache(cache_key, 'all_competitors')
-            if cached_data is not None:
+            cached_version = self._get_from_cache(version_key, 'all_competitors')
+
+            if cached_data is not None and cached_version is not None and int(cached_version) == int(current_version):
                 return cached_data
             
             # Fetch from database
@@ -472,6 +516,7 @@ class FirebaseDataManager:
             
             # Cache the result
             self._set_cache(cache_key, competitors)
+            self._set_cache(version_key, current_version)
             
             return competitors
         except Exception as e:
@@ -481,10 +526,14 @@ class FirebaseDataManager:
     def get_leaderboard(self) -> List[dict]:
         """Generate leaderboard data with caching"""
         try:
-            # Check cache first
+            # Use metadata version to avoid rebuilding leaderboard when unchanged.
             cache_key = 'leaderboard'
+            version_key = 'leaderboard_version'
+            current_version = self._get_data_version()
             cached_data = self._get_from_cache(cache_key, 'leaderboard')
-            if cached_data is not None:
+            cached_version = self._get_from_cache(version_key, 'leaderboard')
+
+            if cached_data is not None and cached_version is not None and int(cached_version) == int(current_version):
                 return cached_data
             
             competitors = self.get_all_competitors()
@@ -538,6 +587,7 @@ class FirebaseDataManager:
             
             # Cache the leaderboard
             self._set_cache('leaderboard', leaderboard)
+            self._set_cache(version_key, current_version)
             
             return leaderboard
         except Exception as e:
@@ -586,7 +636,9 @@ class FirebaseDataManager:
                 'competition_started': False,
                 'start_time': None,
                 'created_at': firestore.SERVER_TIMESTAMP,
-                'problems_loaded': []
+                'problems_loaded': [],
+                'data_version': 0,
+                'last_data_change': firestore.SERVER_TIMESTAMP
             })
             
             print("Competition data reset successfully")
@@ -661,6 +713,7 @@ class FirebaseDataManager:
                 self._invalidate_cache(f'competitor_{name}')
                 self._invalidate_cache('all_competitors')
                 self._invalidate_cache('leaderboard')
+                self._touch_data_version()
                 return True
 
             print(f"[WARNING] Failed to set judge approval: {result.get('message')}")
