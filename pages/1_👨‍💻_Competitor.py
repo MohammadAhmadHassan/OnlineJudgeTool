@@ -12,7 +12,6 @@ import io
 import contextlib
 import time
 import importlib
-import streamlit.components.v1 as components
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -133,6 +132,8 @@ if 'refresh_interval_competitor' not in st.session_state:
     st.session_state.refresh_interval_competitor = 1
 if 'last_refresh_time_competitor' not in st.session_state:
     st.session_state.last_refresh_time_competitor = time.time()
+if 'blocking_refresh_interval_competitor' not in st.session_state:
+    st.session_state.blocking_refresh_interval_competitor = None
 
 # Cached problems loader
 @st.cache_data(ttl=3600)  # Cache problems for 1 hour (they never change)
@@ -468,22 +469,14 @@ else:
         interval_ms = int(st.session_state.refresh_interval_competitor) * 1000
         st_autorefresh_fn = get_streamlit_autorefresh_fn()
         if st_autorefresh_fn is not None:
+            st.session_state.blocking_refresh_interval_competitor = None
             st_autorefresh_fn(interval=interval_ms, key="competitor_auto_refresh")
         else:
-            # Fallback timer if streamlit-autorefresh is not installed.
-            components.html(
-                f"""
-                <script>
-                    setTimeout(function() {{
-                        if (window.parent) {{
-                            window.parent.postMessage({{type: 'streamlit:rerunScript'}}, '*');
-                        }}
-                    }}, {interval_ms});
-                </script>
-                """,
-                height=0,
-            )
-            st.caption("Install streamlit-autorefresh for best live refresh reliability.")
+            # Guaranteed fallback when streamlit-autorefresh isn't installed.
+            st.session_state.blocking_refresh_interval_competitor = max(1, int(st.session_state.refresh_interval_competitor))
+            st.caption("Auto-refresh running in fallback mode.")
+    else:
+        st.session_state.blocking_refresh_interval_competitor = None
 
     st.markdown("---")
     
@@ -773,3 +766,11 @@ else:
 # Footer
 st.markdown("---")
 st.caption("💡 Tip: Test your code before submitting to ensure all test cases pass!")
+
+if (
+    st.session_state.get('competitor_name')
+    and st.session_state.get('auto_refresh_competitor')
+    and st.session_state.get('blocking_refresh_interval_competitor')
+):
+    time.sleep(float(st.session_state.blocking_refresh_interval_competitor))
+    st.rerun()
