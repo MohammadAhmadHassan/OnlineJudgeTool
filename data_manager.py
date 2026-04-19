@@ -91,6 +91,12 @@ class DataManager:
     def get_problem_statistics(self) -> dict:
         """Get statistics for each problem"""
         return self.backend.get_problem_statistics()
+
+    def get_data_version(self):
+        """Get a lightweight change token for competition data."""
+        if hasattr(self.backend, 'get_data_version'):
+            return self.backend.get_data_version()
+        return None
     
     def reset_competition(self):
         """Reset all competition data"""

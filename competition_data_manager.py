@@ -45,6 +45,13 @@ class CompetitionDataManager:
         with self.lock:
             with open(self.data_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def get_data_version(self) -> int:
+        """Return a lightweight change token for the competition dataset."""
+        try:
+            return int(os.path.getmtime(self.data_file) * 1000)
+        except Exception:
+            return int(datetime.now().timestamp() * 1000)
     
     def start_competition(self):
         """Mark competition as started"""

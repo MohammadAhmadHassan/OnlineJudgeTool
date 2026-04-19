@@ -8,6 +8,7 @@ import sys
 import time
 import uuid
 import json
+import importlib
 from datetime import datetime
 
 import pandas as pd
@@ -86,6 +87,10 @@ def ensure_judge_session():
         st.session_state.judge_session_id = str(uuid.uuid4())[:8]
     if "judge_name" not in st.session_state:
         st.session_state.judge_name = f"Judge-{st.session_state.judge_session_id}"
+    if "judge_auto_refresh_enabled" not in st.session_state:
+        st.session_state.judge_auto_refresh_enabled = True
+    if "judge_refresh_interval_seconds" not in st.session_state:
+        st.session_state.judge_refresh_interval_seconds = 5
 
 
 ensure_judge_session()
@@ -176,6 +181,41 @@ def get_review_queue_entries():
     else:
         raw_entries = []
     return normalize_queue_entries(raw_entries)
+
+
+def get_streamlit_autorefresh_fn():
+    """Dynamically load streamlit-autorefresh if installed."""
+    try:
+        module = importlib.import_module("streamlit_autorefresh")
+        return getattr(module, "st_autorefresh", None)
+    except Exception:
+        return None
+
+
+def invalidate_queue_cache():
+    st.session_state.pop("judge_queue_cache_entries", None)
+    st.session_state.pop("judge_queue_cache_version", None)
+
+
+def get_queue_entries_with_version_cache():
+    """Reuse queue entries when backend data version is unchanged."""
+    version_token = None
+    if hasattr(data_manager, "get_data_version"):
+        try:
+            version_token = data_manager.get_data_version()
+        except Exception:
+            version_token = None
+
+    if version_token is not None:
+        cached_version = st.session_state.get("judge_queue_cache_version")
+        cached_entries = st.session_state.get("judge_queue_cache_entries")
+        if cached_entries is not None and cached_version == version_token:
+            return cached_entries
+
+    entries = get_review_queue_entries()
+    st.session_state.judge_queue_cache_entries = entries
+    st.session_state.judge_queue_cache_version = version_token
+    return entries
 
 
 def get_selected_rows_from_table_event(table_event):
@@ -305,6 +345,53 @@ def get_problem_payload(competitor_name, problem_id):
     return competitor_data, problem_data, submissions, latest
 
 
+def invalidate_problem_payload_cache(entry_key=None):
+    cache = st.session_state.get("judge_problem_payload_cache")
+    if not isinstance(cache, dict):
+        st.session_state.pop("judge_problem_payload_cache", None)
+        return
+
+    if entry_key is None:
+        st.session_state.pop("judge_problem_payload_cache", None)
+        return
+
+    cache.pop(str(entry_key), None)
+    if cache:
+        st.session_state.judge_problem_payload_cache = cache
+    else:
+        st.session_state.pop("judge_problem_payload_cache", None)
+
+
+def get_problem_payload_cached(competitor_name, problem_id):
+    """Get selected problem payload with backend-version-aware caching."""
+    entry_key = f"{competitor_name}::{problem_id}"
+    version_token = None
+    if hasattr(data_manager, "get_data_version"):
+        try:
+            version_token = data_manager.get_data_version()
+        except Exception:
+            version_token = None
+
+    if version_token is None:
+        return get_problem_payload(competitor_name, problem_id)
+
+    cache = st.session_state.get("judge_problem_payload_cache")
+    if isinstance(cache, dict):
+        cached_payload = cache.get(entry_key)
+        if isinstance(cached_payload, dict) and cached_payload.get("version") == version_token:
+            return cached_payload.get("payload", (None, None, [], {}))
+    else:
+        cache = {}
+
+    payload = get_problem_payload(competitor_name, problem_id)
+    cache[entry_key] = {
+        "version": version_token,
+        "payload": payload,
+    }
+    st.session_state.judge_problem_payload_cache = cache
+    return payload
+
+
 def to_write_problem_id(problem_id):
     text = str(problem_id)
     return int(text) if text.isdigit() else problem_id
@@ -328,7 +415,7 @@ def render_approval_chip(approval):
     return '<span class="status-chip status-pending">Pending Decision</span>'
 
 
-queue_entries = get_review_queue_entries()
+queue_entries = get_queue_entries_with_version_cache()
 
 
 with st.sidebar:
@@ -343,12 +430,20 @@ with st.sidebar:
 
     st.caption(f"Session ID: {st.session_state.judge_session_id}")
 
-    auto_refresh = st.checkbox(
-        "Auto-refresh every 5s",
-        value=True,
-        help="Keep queue and locks updated"
+    auto_refresh = st.toggle(
+        "Auto-refresh queue",
+        key="judge_auto_refresh_enabled",
+        help="Refresh queue and lock states without leaving your current review"
+    )
+    refresh_interval_seconds = st.slider(
+        "Refresh interval (seconds)",
+        min_value=2,
+        max_value=30,
+        key="judge_refresh_interval_seconds"
     )
     if st.button("Refresh now", use_container_width=True):
+        invalidate_queue_cache()
+        invalidate_problem_payload_cache()
         st.rerun()
 
     st.markdown("---")
@@ -402,20 +497,20 @@ with st.sidebar:
             data_manager.reset_competition()
             st.success("Competition reset complete")
             st.session_state.confirm_reset = False
+            invalidate_queue_cache()
+            invalidate_problem_payload_cache()
             st.rerun()
         else:
             st.session_state.confirm_reset = True
             st.warning("Click again to confirm reset")
 
-
-pending_auto_refresh = False
+use_blocking_auto_refresh = False
 if auto_refresh:
-    now = time.time()
-    is_actively_reviewing = bool(st.session_state.get("active_review_entry"))
-    if "last_refresh" not in st.session_state:
-        st.session_state.last_refresh = now
-    elif (not is_actively_reviewing) and now - st.session_state.last_refresh >= 5:
-        pending_auto_refresh = True
+    st_autorefresh_fn = get_streamlit_autorefresh_fn()
+    if st_autorefresh_fn is not None:
+        st_autorefresh_fn(interval=int(refresh_interval_seconds) * 1000, key="judge_auto_refresh")
+    else:
+        use_blocking_auto_refresh = True
 
 
 st.title("Judge Review Queue")
@@ -519,9 +614,12 @@ with right_col:
     st.subheader("Review Panel")
 
     judge_name = st.session_state.judge_name
-    selected_key = st.session_state.get("selected_review_entry")
-    if not selected_key:
-        selected_key = st.session_state.get("active_review_entry")
+    active_review_entry = st.session_state.get("active_review_entry")
+    if active_review_entry:
+        selected_key = active_review_entry
+        st.session_state.selected_review_entry = active_review_entry
+    else:
+        selected_key = st.session_state.get("selected_review_entry")
 
     selected_entry = None
     if selected_key:
@@ -554,25 +652,31 @@ with right_col:
         problem_id = selected_entry["problem_id"]
         entry_key = selected_entry["entry_key"]
 
-        _, problem_data, submissions, latest_submission = get_problem_payload(competitor_name, problem_id)
+        current_status = selected_entry.get("review_status", "pending_review")
+        current_approval = selected_entry.get("judge_approval", "pending")
+        lock_owner = selected_entry.get("locked_by")
+        if active_review_entry == entry_key:
+            current_status = "under_review" if current_status == "pending_review" else current_status
+            lock_owner = lock_owner or judge_name
+
+        _, problem_data, submissions, latest_submission = get_problem_payload_cached(competitor_name, problem_id)
         if not problem_data:
-            st.error("Could not load the selected problem details.")
+            st.warning("Live submission details are temporarily unavailable. Auto-refresh will retry.")
             st.stop()
 
-        current_status = normalize_review_status(problem_data)
-        queue_status = selected_entry.get("review_status")
-        if STATUS_ORDER.get(queue_status, -1) > STATUS_ORDER.get(current_status, -1):
-            current_status = queue_status
+        live_status = normalize_review_status(problem_data)
+        if STATUS_ORDER.get(current_status, -1) > STATUS_ORDER.get(live_status, -1):
+            live_status = current_status
+        current_status = live_status
+
+        current_approval = problem_data.get("judge_approval", current_approval)
+        lock_owner = problem_data.get("review_locked_by") or lock_owner
 
         problem_definition = get_problem_definition(
             problem_id,
             week=selected_entry.get("week"),
             level=selected_entry.get("level"),
         )
-
-        current_approval = problem_data.get("judge_approval", "pending")
-        lock_owner = problem_data.get("review_locked_by") or selected_entry.get("locked_by")
-        active_review_entry = st.session_state.get("active_review_entry")
 
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown(f"### {competitor_name} - Problem {problem_id}")
@@ -638,6 +742,8 @@ with right_col:
                     st.session_state.active_review_entry = entry_key
                     st.session_state.selected_review_entry = entry_key
                     st.session_state.freeze_table_selection_once = True
+                    invalidate_queue_cache()
+                    invalidate_problem_payload_cache(entry_key)
                     st.success(message or "Submission locked for your review")
                 else:
                     st.error(message or "Unable to open this entry for review")
@@ -670,6 +776,8 @@ with right_col:
                             st.session_state.pop("active_review_entry", None)
                         st.session_state.selected_review_entry = entry_key
                         st.session_state.freeze_table_selection_once = True
+                        invalidate_queue_cache()
+                        invalidate_problem_payload_cache(entry_key)
                         st.success("Submission marked as reviewed and approved")
                     else:
                         st.error("Failed to approve this submission")
@@ -692,6 +800,8 @@ with right_col:
                             st.session_state.pop("active_review_entry", None)
                         st.session_state.selected_review_entry = entry_key
                         st.session_state.freeze_table_selection_once = True
+                        invalidate_queue_cache()
+                        invalidate_problem_payload_cache(entry_key)
                         st.warning("Submission marked as reviewed and rejected")
                     else:
                         st.error("Failed to reject this submission")
@@ -700,8 +810,8 @@ with right_col:
         if current_status == "reviewed":
             if st.session_state.get("active_review_entry") == entry_key:
                 st.session_state.pop("active_review_entry", None)
-            reviewed_by = problem_data.get("review_completed_by") or "-"
-            reviewed_at = format_timestamp(problem_data.get("review_completed_at") or problem_data.get("judge_approval_time"))
+            reviewed_by = (problem_data or {}).get("review_completed_by") or "-"
+            reviewed_at = format_timestamp((problem_data or {}).get("review_completed_at") or (problem_data or {}).get("judge_approval_time"))
             st.info(f"Reviewed by {reviewed_by} at {reviewed_at}")
 
         can_view_code = (
@@ -735,6 +845,6 @@ with right_col:
 st.markdown("---")
 st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-if pending_auto_refresh:
-    st.session_state.last_refresh = time.time()
+if use_blocking_auto_refresh:
+    time.sleep(float(refresh_interval_seconds))
     st.rerun()

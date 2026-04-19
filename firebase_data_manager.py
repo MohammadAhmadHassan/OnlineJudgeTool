@@ -182,6 +182,10 @@ class FirebaseDataManager:
         except Exception as e:
             print(f"Error reading data version: {e}")
             return 0
+
+    def get_data_version(self) -> int:
+        """Public accessor for current data version token."""
+        return self._get_data_version()
     
     def start_competition(self):
         """Mark competition as started"""
