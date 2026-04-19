@@ -91,6 +91,12 @@ class DataManager:
     def get_problem_statistics(self) -> dict:
         """Get statistics for each problem"""
         return self.backend.get_problem_statistics()
+
+    def get_data_version(self):
+        """Get a lightweight change token for competition data."""
+        if hasattr(self.backend, 'get_data_version'):
+            return self.backend.get_data_version()
+        return None
     
     def reset_competition(self):
         """Reset all competition data"""
@@ -100,9 +106,24 @@ class DataManager:
         """Check if a competitor name is already taken"""
         return self.backend.is_name_taken(name)
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str):
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
         """Set judge approval status for a problem (approved/rejected)"""
-        return self.backend.set_judge_approval(name, problem_id, status)
+        return self.backend.set_judge_approval(name, problem_id, status, judge_id=judge_id)
+
+    def get_review_queue(self):
+        """Get solved submissions queue for judge review"""
+        if hasattr(self.backend, 'get_review_queue'):
+            return self.backend.get_review_queue()
+        return []
+
+    def start_problem_review(self, name: str, problem_id: int, judge_id: str):
+        """Lock a solved problem for review (pending_review -> under_review)"""
+        if hasattr(self.backend, 'start_problem_review'):
+            return self.backend.start_problem_review(name, problem_id, judge_id)
+        return {
+            'success': False,
+            'message': 'Current backend does not support review locking'
+        }
     
     def add_listener(self, callback):
         """
