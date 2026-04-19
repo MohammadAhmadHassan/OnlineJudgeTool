@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import uuid
+import json
 from datetime import datetime
 
 import pandas as pd
@@ -218,6 +219,67 @@ def split_entry_key(entry_key):
 def entry_widget_key(prefix, entry_key):
     token = str(entry_key).replace("::", "__").replace(" ", "_")
     return f"{prefix}_{token}"
+
+
+def parse_optional_int(value):
+    if value in (None, "", "All"):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def get_problem_definition(problem_id, week=None, level=None):
+    """Load problem metadata (title/description) for judge context."""
+    problem_key = str(problem_id)
+    week_int = parse_optional_int(week)
+    level_int = parse_optional_int(level)
+    lookup_problem_id = int(problem_key) if problem_key.isdigit() else problem_id
+
+    # Try direct lookup first.
+    try:
+        problem = data_manager.get_problem_by_id(lookup_problem_id, week=week_int)
+        if isinstance(problem, dict) and problem:
+            return problem
+    except Exception:
+        pass
+
+    # Fall back to indexed problem list lookup.
+    try:
+        problems = data_manager.get_problems(week=week_int, level=level_int)
+        if isinstance(problems, dict):
+            for candidate_id, payload in problems.items():
+                if str(candidate_id) == problem_key and isinstance(payload, dict):
+                    return payload
+    except Exception:
+        pass
+
+    # Final fallback for local JSON deployments without backend problem APIs.
+    workspace_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    problems_dir = os.path.join(workspace_root, "problems")
+    candidate_files = []
+    if problem_key.isdigit():
+        candidate_files = [
+            f"problem{int(problem_key)}.json",
+            f"harder_problem_{int(problem_key)}.json",
+        ]
+    else:
+        candidate_files = [f"{problem_key}.json"]
+
+    for file_name in candidate_files:
+        file_path = os.path.join(problems_dir, file_name)
+        if not os.path.exists(file_path):
+            continue
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+
+    return None
 
 
 def get_problem_payload(competitor_name, problem_id):
@@ -502,6 +564,12 @@ with right_col:
         if STATUS_ORDER.get(queue_status, -1) > STATUS_ORDER.get(current_status, -1):
             current_status = queue_status
 
+        problem_definition = get_problem_definition(
+            problem_id,
+            week=selected_entry.get("week"),
+            level=selected_entry.get("level"),
+        )
+
         current_approval = problem_data.get("judge_approval", "pending")
         lock_owner = problem_data.get("review_locked_by") or selected_entry.get("locked_by")
         active_review_entry = st.session_state.get("active_review_entry")
@@ -512,6 +580,24 @@ with right_col:
             f"{render_status_chip(current_status)} {render_approval_chip(current_approval)}",
             unsafe_allow_html=True,
         )
+
+        with st.expander("Question Text", expanded=True):
+            if problem_definition:
+                question_title = problem_definition.get("title") or f"Problem {problem_id}"
+                question_description = (
+                    problem_definition.get("description")
+                    or problem_definition.get("problem_statement")
+                    or problem_definition.get("statement")
+                    or "No question text available."
+                )
+                question_difficulty = problem_definition.get("difficulty")
+
+                st.markdown(f"**Title:** {question_title}")
+                if question_difficulty:
+                    st.markdown(f"**Difficulty:** {question_difficulty}")
+                st.markdown(question_description)
+            else:
+                st.caption("Question text could not be loaded for this problem.")
 
         meta_col1, meta_col2, meta_col3 = st.columns(3)
         meta_col1.markdown(f"**Locked By:** {lock_owner or '-'}")
