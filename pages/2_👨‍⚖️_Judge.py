@@ -438,7 +438,7 @@ with st.sidebar:
     refresh_interval_seconds = st.slider(
         "Refresh interval (seconds)",
         min_value=2,
-        max_value=30,
+        max_value=240,
         key="judge_refresh_interval_seconds"
     )
     if st.button("Refresh now", use_container_width=True):

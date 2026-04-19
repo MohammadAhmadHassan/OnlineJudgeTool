@@ -143,7 +143,7 @@ with refresh_col1:
     st.slider(
         "Auto-refresh interval (seconds)",
         min_value=1,
-        max_value=10,
+        max_value=240,
         key="spectator_refresh_seconds"
     )
 with refresh_col2:
