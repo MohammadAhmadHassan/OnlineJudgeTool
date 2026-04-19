@@ -179,11 +179,9 @@ def get_review_queue_entries():
 
 
 def get_selected_rows_from_table_event(table_event):
-    """Read selected rows only from the current dataframe selection event."""
-    try:
-        return list(table_event.selection.rows)
-    except Exception:
-        return []
+    """Read selected rows from the current dataframe event (rows or cells)."""
+    selection = getattr(table_event, "selection", None)
+    return get_rows_from_selection(selection)
 
 
 def get_selected_rows_from_table_state(widget_key):
@@ -194,16 +192,64 @@ def get_selected_rows_from_table_state(widget_key):
 
     if isinstance(table_state, dict):
         selection_state = table_state.get("selection", {})
-        rows = selection_state.get("rows", []) or []
-        try:
-            return list(rows)
-        except Exception:
-            return []
+        return get_rows_from_selection(selection_state)
 
-    try:
-        return list(table_state.selection.rows)
-    except Exception:
+    return get_rows_from_selection(getattr(table_state, "selection", table_state))
+
+
+def get_rows_from_selection(selection):
+    """Normalize Streamlit selection payload into a list of row indexes."""
+    if selection is None:
         return []
+
+    rows = []
+    if isinstance(selection, dict):
+        rows = selection.get("rows", []) or []
+    else:
+        try:
+            rows = list(selection.rows)
+        except Exception:
+            rows = []
+
+    normalized_rows = []
+    for row_idx in rows:
+        if isinstance(row_idx, int):
+            normalized_rows.append(row_idx)
+        elif isinstance(row_idx, str) and row_idx.isdigit():
+            normalized_rows.append(int(row_idx))
+
+    if normalized_rows:
+        return normalized_rows
+
+    cells = []
+    if isinstance(selection, dict):
+        cells = selection.get("cells", []) or []
+    else:
+        try:
+            cells = list(selection.cells)
+        except Exception:
+            cells = []
+
+    cell_rows = []
+    for cell in cells:
+        if isinstance(cell, dict):
+            row_idx = cell.get("row")
+        else:
+            row_idx = getattr(cell, "row", None)
+
+        if isinstance(row_idx, int):
+            cell_rows.append(row_idx)
+        elif isinstance(row_idx, str) and row_idx.isdigit():
+            cell_rows.append(int(row_idx))
+
+    seen = set()
+    unique_rows = []
+    for row_idx in cell_rows:
+        if row_idx not in seen:
+            seen.add(row_idx)
+            unique_rows.append(row_idx)
+
+    return unique_rows
 
 
 def split_entry_key(entry_key):
@@ -495,7 +541,7 @@ with left_col:
             use_container_width=True,
             hide_index=True,
             on_select="rerun",
-            selection_mode="single-row",
+            selection_mode="single-cell",
             key="review_queue_table",
         )
 
