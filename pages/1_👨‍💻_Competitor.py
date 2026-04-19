@@ -10,6 +10,7 @@ import sys
 import os
 import io
 import contextlib
+import time
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -124,6 +125,12 @@ if 'user_week' not in st.session_state:
     st.session_state.user_week = None
 if 'user_level' not in st.session_state:
     st.session_state.user_level = None
+if 'auto_refresh_competitor' not in st.session_state:
+    st.session_state.auto_refresh_competitor = True
+if 'refresh_interval_competitor' not in st.session_state:
+    st.session_state.refresh_interval_competitor = 1
+if 'last_refresh_time_competitor' not in st.session_state:
+    st.session_state.last_refresh_time_competitor = time.time()
 
 # Cached problems loader
 @st.cache_data(ttl=3600)  # Cache problems for 1 hour (they never change)
@@ -271,6 +278,18 @@ def run_code_with_tests(code, test_cases):
     
     return results
 
+
+def get_judge_status_badge(judge_approval, has_submission):
+    """Return HTML badge representing current judge review status."""
+    if not has_submission:
+        return None
+
+    if judge_approval == 'approved':
+        return '<span class="stat-badge badge-success">👨‍⚖️ Approved</span>'
+    if judge_approval == 'rejected':
+        return '<span class="stat-badge badge-danger">👨‍⚖️ Rejected</span>'
+    return '<span class="stat-badge badge-warning">👨‍⚖️ Pending Review</span>'
+
 # Header
 st.markdown("# 👨‍💻 Competitor Interface")
 
@@ -380,6 +399,7 @@ if st.session_state.competitor_name is None:
 else:
     # Competitor is logged in
     competitor_name = st.session_state.competitor_name
+    pending_auto_refresh_competitor = False
     
     # Sidebar
     with st.sidebar:
@@ -408,12 +428,36 @@ else:
         st.markdown(f"**Total Submissions:** {total_submissions}")
         
         st.markdown("---")
+
+        st.markdown("### 🔄 Live Updates")
+        st.checkbox(
+            "Auto-refresh",
+            key="auto_refresh_competitor",
+            help="Keep submission and judge status synced automatically"
+        )
+        st.slider(
+            "Refresh interval (seconds)",
+            min_value=1,
+            max_value=10,
+            key="refresh_interval_competitor"
+        )
+        if st.button("🔄 Refresh Now", use_container_width=True):
+            st.session_state.last_refresh_time_competitor = time.time()
+            st.rerun()
+
+        st.markdown("---")
         
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.competitor_name = None
             st.session_state.current_problem = None
             st.session_state.code = ""
             st.rerun()
+
+    if st.session_state.auto_refresh_competitor:
+        current_time = time.time()
+        refresh_interval = int(st.session_state.refresh_interval_competitor)
+        if current_time - st.session_state.last_refresh_time_competitor >= refresh_interval:
+            pending_auto_refresh_competitor = True
     
     # Main content
     # Load problems filtered by user's week and level
@@ -446,6 +490,7 @@ else:
             problem_data = fresh_problems_data.get(problem_id_str, {})
             best_result = problem_data.get('best_result', {})
             submissions = problem_data.get('submissions', [])
+            judge_approval = problem_data.get('judge_approval')
             
             # Apply filter
             if filter_option == "Not Attempted" and submissions:
@@ -479,6 +524,9 @@ else:
                             f'<span class="stat-badge badge-info">Attempts: {len(submissions)}</span>',
                             unsafe_allow_html=True
                         )
+                    judge_badge = get_judge_status_badge(judge_approval, bool(submissions))
+                    if judge_badge:
+                        st.markdown(judge_badge, unsafe_allow_html=True)
                     st.markdown(f"**Difficulty:** {problem.get('difficulty', 'Medium')}")
                     st.markdown(f"**Description:** {problem.get('description', 'No description')}")
                 
@@ -663,6 +711,12 @@ else:
             problem_id_str = str(problem_id)
             problem_data = fresh_problems_data.get(problem_id_str, {})
             submissions = problem_data.get('submissions', [])
+            judge_approval = problem_data.get('judge_approval')
+
+            if submissions:
+                judge_badge = get_judge_status_badge(judge_approval, True)
+                if judge_badge:
+                    st.markdown(judge_badge, unsafe_allow_html=True)
             
             # Debug info
             # if not submissions:
@@ -691,3 +745,7 @@ else:
 # Footer
 st.markdown("---")
 st.caption("💡 Tip: Test your code before submitting to ensure all test cases pass!")
+
+if st.session_state.get('competitor_name') and 'pending_auto_refresh_competitor' in locals() and pending_auto_refresh_competitor:
+    st.session_state.last_refresh_time_competitor = time.time()
+    st.rerun()
