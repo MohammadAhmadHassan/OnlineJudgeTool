@@ -38,6 +38,9 @@ class SpectatorDashboard:
         # Editable frequencies (single place for all automatic polling intervals)
         self.AUTO_REFRESH_INTERVAL_MS = 10000
 
+        # Version cache — skip full fetch when data has not changed
+        self._last_data_version = None
+
         # Cache for problem stats widgets (initialized here, not lazily)
         self._stat_items_cache = {}
 
@@ -349,8 +352,17 @@ class SpectatorDashboard:
     def refresh_data(self):
         """Refresh all data"""
         try:
+            # Version check: skip expensive fetches when nothing has changed
+            current_version = self.data_manager.get_data_version()
+            if current_version is not None and current_version == self._last_data_version:
+                self.animate_refresh_indicator()
+                if self.auto_refresh:
+                    self.refresh_job = self.root.after(self.AUTO_REFRESH_INTERVAL_MS, self.refresh_data)
+                return
+            self._last_data_version = current_version
+
             leaderboard = self.data_manager.get_leaderboard()
-            
+
             # Update podium (top 3)
             self.update_podium(leaderboard)
             

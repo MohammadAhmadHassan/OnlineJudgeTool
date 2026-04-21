@@ -30,21 +30,33 @@ class CompetitionDataManager:
             self.save_data(initial_data)
     
     def load_data(self) -> dict:
-        """Load competition data from file"""
+        """Load competition data from file, with mtime-based in-memory cache.
+        Multiple get_* calls within the same refresh cycle pay zero I/O after
+        the first read as long as the file has not been modified."""
         with self.lock:
             try:
+                mtime = os.path.getmtime(self.data_file)
+            except OSError:
+                mtime = None
+            cached_mtime, cached_data = getattr(self, '_data_cache', (None, None))
+            if mtime is not None and mtime == cached_mtime and cached_data is not None:
+                return cached_data
+            try:
                 with open(self.data_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 self.initialize_data()
                 with open(self.data_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-    
+                    data = json.load(f)
+            self._data_cache = (mtime, data)
+            return data
+
     def save_data(self, data: dict):
-        """Save competition data to file"""
+        """Save competition data to file and invalidate the read cache."""
         with self.lock:
             with open(self.data_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+            self._data_cache = (None, None)  # force fresh read after any write
 
     def get_data_version(self) -> int:
         """Return a lightweight change token for the competition dataset."""

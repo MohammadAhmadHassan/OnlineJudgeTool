@@ -36,7 +36,15 @@ class JudgeDashboard:
         self.selected_competitor = None
         self.auto_refresh = True
         self.refresh_job = None
-        
+
+        # Editable frequencies (single place for all automatic polling/status windows)
+        self.AUTO_REFRESH_INTERVAL_MS = 10000
+        self.ACTIVE_WINDOW_SECONDS = 300
+        self.IDLE_WINDOW_SECONDS = 1800
+        # Data caches — minimise get requests
+        self._last_leaderboard = []
+        self._last_data_version = None
+
         # Configure styles
         self.configure_styles()
         
@@ -560,10 +568,10 @@ class JudgeDashboard:
             try:
                 last_activity = datetime.fromisoformat(entry['last_activity'])
                 now = datetime.now()
-                if (now - last_activity).seconds < 300:
+                if (now - last_activity).seconds < self.ACTIVE_WINDOW_SECONDS:
                     status = "🟢 Active"
                     status_tag = "active"
-                elif (now - last_activity).seconds < 1800:
+                elif (now - last_activity).seconds < self.IDLE_WINDOW_SECONDS:
                     status = "🟡 Idle"
                     status_tag = "idle"
                 else:
@@ -613,46 +621,15 @@ class JudgeDashboard:
         self.competitors_tree.tag_configure("has_pending", foreground='#f39c12')
     
     def filter_competitors(self, event=None):
-        """Filter competitors based on search and pending filter"""
-        all_competitors = self.data_manager.get_all_competitors()
-        leaderboard = []
-        
-        # Build leaderboard with pending count
-        for name, competitor_data in all_competitors.items():
-            # Count pending problems (solved but not reviewed)
-            pending_count = 0
-            for problem_id, problem_data in competitor_data.get('problems', {}).items():
-                best_result = problem_data.get('best_result', {})
-                judge_approval = problem_data.get('judge_approval')
-                if best_result and best_result.get('all_passed', False) and not judge_approval:
-                    pending_count += 1
-            
-            # Apply pending filter
-            if self.show_pending_only_var.get() and pending_count == 0:
-                continue
-            
-            # Apply search filter
-            search_text = self.search_entry.get().lower()
-            if search_text and search_text not in name.lower():
-                continue
-            
-            # Count solved problems
-            solved_count = sum(1 for p in competitor_data.get('problems', {}).values()
-                             if p.get('best_result', {}).get('all_passed', False))
-            
-            # Count total submissions
-            total_subs = sum(len(p.get('submissions', [])) 
-                           for p in competitor_data.get('problems', {}).values())
-            
-            leaderboard.append({
-                'name': name,
-                'problems_solved': solved_count,
-                'total_submissions': total_subs,
-                'current_problem': competitor_data.get('current_problem', 1),
-                'last_activity': competitor_data.get('last_activity', ''),
-                'pending_count': pending_count
-            })
-        
+        """Filter competitors based on search and pending filter.
+        Uses the cached leaderboard — no extra get request."""
+        show_pending = self.show_pending_only_var.get()
+        search_text = self.search_entry.get().lower()
+        leaderboard = [
+            entry for entry in self._last_leaderboard
+            if (not show_pending or entry.get('pending_count', 0) > 0)
+            and (not search_text or search_text in entry['name'].lower())
+        ]
         self.update_competitors_tree(leaderboard)
     
     def apply_problem_filter(self):
