@@ -217,6 +217,7 @@ class FirebaseDataManager:
                 'joined_at': datetime.now().isoformat(),
                 'current_problem': 1,
                 'problems': {},
+                'notifications': [],
                 'last_activity': datetime.now().isoformat(),
                 'created_at': firestore.SERVER_TIMESTAMP
             }
@@ -249,7 +250,7 @@ class FirebaseDataManager:
             print(f"Error updating competitor problem: {e}")
     
     def submit_solution(self, name: str, problem_id: int, code: str, 
-                       test_results: List[dict], all_passed: bool):
+                       test_results: List[dict], all_passed: bool, problem_name: str = None):
         """Record a solution submission"""
         try:
             doc_ref = self.competitors_ref.document(name)
@@ -279,6 +280,7 @@ class FirebaseDataManager:
                 problems[problem_key] = {
                     'submissions': [],
                     'best_result': None,
+                    'problem_name': problem_name or f'Problem {problem_id}',
                     'judge_approval': 'pending',  # Initialize approval status
                     'judge_approval_time': None,
                     'review_status': None,
@@ -291,6 +293,8 @@ class FirebaseDataManager:
                 }
             
             # Add submission
+            if problem_name:
+                problems[problem_key]['problem_name'] = problem_name
             problems[problem_key]['submissions'].append(submission)
             
             # Update best result if this is better
@@ -651,7 +655,7 @@ class FirebaseDataManager:
         except Exception as e:
             print(f"Error resetting competition: {e}")
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None, problem_name: str = None):
         """Finalize judge decision and mark review lifecycle as reviewed."""
         try:
             problem_id_str = str(problem_id)
@@ -705,6 +709,18 @@ class FirebaseDataManager:
                     update_dict[f'problems.{problem_id_str}.review_completed_by'] = judge_id
                 elif lock_owner:
                     update_dict[f'problems.{problem_id_str}.review_completed_by'] = lock_owner
+
+                if status == 'rejected':
+                    resolved_problem_name = problem_name or problem_data.get('problem_name') or f'Problem {problem_id_str}'
+                    notifications = list(competitor_data.get('notifications', []))
+                    notifications.append({
+                        'problem_id': int(problem_id_str) if problem_id_str.isdigit() else problem_id_str,
+                        'problem_name': resolved_problem_name,
+                        'created_at': now,
+                        'status': 'rejected'
+                    })
+                    update_dict[f'problems.{problem_id_str}.problem_name'] = resolved_problem_name
+                    update_dict['notifications'] = notifications[-50:]
 
                 transaction.update(competitor_ref, update_dict)
                 return {

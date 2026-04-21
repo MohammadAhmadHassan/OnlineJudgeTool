@@ -72,6 +72,7 @@ class CompetitionDataManager:
             "joined_at": datetime.now().isoformat(),
             "current_problem": 1,
             "problems": {},
+            "notifications": [],
             "last_activity": datetime.now().isoformat()
         }
         
@@ -95,7 +96,7 @@ class CompetitionDataManager:
             self.save_data(data)
     
     def submit_solution(self, name: str, problem_id: int, code: str, 
-                       test_results: List[dict], all_passed: bool):
+                       test_results: List[dict], all_passed: bool, problem_name: str = None):
         """Record a solution submission"""
         data = self.load_data()
         
@@ -116,6 +117,7 @@ class CompetitionDataManager:
             data["competitors"][name]["problems"][str(problem_id)] = {
                 "submissions": [],
                 "best_result": None,
+                "problem_name": problem_name or f"Problem {problem_id}",
                 "judge_approval": "pending",
                 "judge_approval_time": None,
                 "review_status": None,
@@ -128,6 +130,8 @@ class CompetitionDataManager:
             }
         
         problem_data = data["competitors"][name]["problems"][str(problem_id)]
+        if problem_name:
+            problem_data["problem_name"] = problem_name
         problem_data["submissions"].append(submission)
         
         # Update best result if this is better
@@ -366,7 +370,7 @@ class CompetitionDataManager:
         }
         self.save_data(initial_data)
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None, problem_name: str = None):
         """Set judge approval status for a problem (approved/rejected)"""
         try:
             data = self.load_data()
@@ -402,6 +406,18 @@ class CompetitionDataManager:
                 problem_data["review_completed_by"] = lock_owner
             problem_data["review_locked_by"] = None
             problem_data["review_locked_at"] = None
+
+            if status == "rejected":
+                notifications = data["competitors"][name].get("notifications", [])
+                resolved_problem_name = problem_name or problem_data.get("problem_name") or f"Problem {problem_id_str}"
+                problem_data["problem_name"] = resolved_problem_name
+                notifications.append({
+                    "problem_id": int(problem_id_str) if problem_id_str.isdigit() else problem_id_str,
+                    "problem_name": resolved_problem_name,
+                    "created_at": now,
+                    "status": "rejected"
+                })
+                data["competitors"][name]["notifications"] = notifications[-50:]
             
             self.save_data(data)
             print(f"[OK] Set judge approval for {name} - Problem {problem_id}: {status}")

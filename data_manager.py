@@ -72,9 +72,9 @@ class DataManager:
         return self.backend.update_competitor_problem(name, problem_id)
     
     def submit_solution(self, name: str, problem_id: int, code: str, 
-                       test_results: List[dict], all_passed: bool):
+                       test_results: List[dict], all_passed: bool, problem_name: str = None):
         """Record a solution submission"""
-        return self.backend.submit_solution(name, problem_id, code, test_results, all_passed)
+        return self.backend.submit_solution(name, problem_id, code, test_results, all_passed, problem_name=problem_name)
     
     def get_competitor_data(self, name: str) -> Optional[dict]:
         """Get data for a specific competitor"""
@@ -106,9 +106,15 @@ class DataManager:
         """Check if a competitor name is already taken"""
         return self.backend.is_name_taken(name)
     
-    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None):
+    def set_judge_approval(self, name: str, problem_id: int, status: str, judge_id: str = None, problem_name: str = None):
         """Set judge approval status for a problem (approved/rejected)"""
-        return self.backend.set_judge_approval(name, problem_id, status, judge_id=judge_id)
+        return self.backend.set_judge_approval(
+            name,
+            problem_id,
+            status,
+            judge_id=judge_id,
+            problem_name=problem_name,
+        )
 
     def get_review_queue(self):
         """Get solved submissions queue for judge review"""

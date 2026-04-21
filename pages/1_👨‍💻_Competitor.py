@@ -279,6 +279,28 @@ def get_judge_status_badge(judge_approval, has_submission):
         return '<span class="stat-badge badge-danger">👨‍⚖️ Rejected</span>'
     return '<span class="stat-badge badge-warning">👨‍⚖️ Pending Review</span>'
 
+
+def get_rejection_notifications(comp_data):
+    """Extract judge rejection notices (problem number + name only)."""
+    notifications = comp_data.get('notifications', []) if isinstance(comp_data, dict) else []
+    rejected = []
+    for notice in notifications:
+        if not isinstance(notice, dict):
+            continue
+        if notice.get('status') != 'rejected':
+            continue
+        problem_id = notice.get('problem_id')
+        problem_name = notice.get('problem_name')
+        if problem_id is None:
+            continue
+        if not problem_name:
+            problem_name = f"Problem {problem_id}"
+        rejected.append({
+            'problem_id': problem_id,
+            'problem_name': problem_name
+        })
+    return rejected
+
 # Header
 st.markdown("# 👨‍💻 Competitor Interface")
 
@@ -426,6 +448,12 @@ else:
             st.session_state.current_problem = None
             st.session_state.code = ""
             st.rerun()
+
+    rejection_notifications = get_rejection_notifications(comp_data)
+    if rejection_notifications:
+        st.markdown("### 🔔 Judge Notifications")
+        for notice in reversed(rejection_notifications[-5:]):
+            st.warning(f"Problem {notice['problem_id']}: {notice['problem_name']}")
 
     # Main content
     # Load problems filtered by user's week and level
@@ -615,7 +643,8 @@ else:
                                 problem_id,
                                 code,
                                 results,
-                                all_passed
+                                all_passed,
+                                problem_name=problem.get('title', f'Problem {problem_id}')
                             )
                             
                             st.session_state.test_results = results

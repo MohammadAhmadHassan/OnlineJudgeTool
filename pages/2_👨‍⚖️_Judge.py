@@ -770,6 +770,7 @@ with right_col:
                         to_write_problem_id(problem_id),
                         "approved",
                         judge_id=judge_name,
+                        problem_name=(problem_definition or {}).get("title") or problem_data.get("problem_name"),
                     )
                     if approved:
                         if st.session_state.get("active_review_entry") == entry_key:
@@ -794,6 +795,7 @@ with right_col:
                         to_write_problem_id(problem_id),
                         "rejected",
                         judge_id=judge_name,
+                        problem_name=(problem_definition or {}).get("title") or problem_data.get("problem_name"),
                     )
                     if rejected:
                         if st.session_state.get("active_review_entry") == entry_key:
