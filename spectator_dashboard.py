@@ -34,7 +34,13 @@ class SpectatorDashboard:
         
         self.auto_refresh = True
         self.refresh_job = None
-        
+
+        # Editable frequencies (single place for all automatic polling intervals)
+        self.AUTO_REFRESH_INTERVAL_MS = 10000
+
+        # Cache for problem stats widgets (initialized here, not lazily)
+        self._stat_items_cache = {}
+
         # Configure styles
         self.configure_styles()
         
@@ -337,7 +343,7 @@ class SpectatorDashboard:
         ttk.Label(footer, textvariable=self.competitor_count_var,
                  font=('Segoe UI', 9), foreground='#6c757d').pack(side=tk.LEFT, padx=20)
         
-        ttk.Label(footer, text="Auto-refreshes every 5 seconds",
+        ttk.Label(footer, text=f"Auto-refreshes every {self.AUTO_REFRESH_INTERVAL_MS // 1000} seconds",
                  font=('Segoe UI', 9, 'italic'), foreground='#6c757d').pack(side=tk.RIGHT, padx=20)
     
     def refresh_data(self):
@@ -367,10 +373,15 @@ class SpectatorDashboard:
         except Exception as e:
             self.last_update_var.set(f"Error: {str(e)}")
         
-        # Schedule next refresh (increased from 5s to 10s for better performance)
+        # Schedule next refresh
         if self.auto_refresh:
-            self.refresh_job = self.root.after(10000, self.refresh_data)
+            self.refresh_job = self.root.after(self.AUTO_REFRESH_INTERVAL_MS, self.refresh_data)
     
+    def _format_approval_score(self, approved_count, rejected_count):
+        """Format net approval score as a +/- string"""
+        score = approved_count - rejected_count
+        return f"+{score}" if score > 0 else str(score)
+
     def update_podium(self, leaderboard):
         """Update podium display with top 3"""
         # Clear all podium cards first
@@ -388,17 +399,8 @@ class SpectatorDashboard:
                 card = self.podium_cards[i]
                 approved_count = entry.get('approved_problems', 0)
                 rejected_count = entry.get('rejected_problems', 0)
-                
-                # Calculate approval score: +1 for approved, -1 for rejected
-                approval_score = approved_count - rejected_count
-                
-                if approval_score > 0:
-                    approved_display = f"+{approval_score}"
-                elif approval_score < 0:
-                    approved_display = f"{approval_score}"
-                else:
-                    approved_display = "0"
-                
+                approved_display = self._format_approval_score(approved_count, rejected_count)
+
                 card['name_var'].set(entry['name'])
                 card['approved_var'].set(approved_display)
                 card['solved_var'].set(str(entry['problems_solved']))
@@ -429,28 +431,17 @@ class SpectatorDashboard:
             else:
                 rank = str(i)
             
-            # Format approved problems display with +/- notation
-            # Count: approved (+1 each), rejected (-1 each), pending (0)
             approved_count = entry.get('approved_problems', 0)
             rejected_count = entry.get('rejected_problems', 0)
-            
-            # Calculate total: +1 for approved, -1 for rejected
-            approval_score = approved_count - rejected_count
-            
-            if approval_score > 0:
-                approved_display = f"+{approval_score}"
-            elif approval_score < 0:
-                approved_display = f"{approval_score}"  # Already has minus sign
-            else:
-                approved_display = "0"
-            
+            approved_display = self._format_approval_score(approved_count, rejected_count)
+
             new_values = (
                 rank,
                 entry['name'],
                 approved_display,
-                entry['problems_solved'],
-                entry['total_tests_passed'],
-                entry['total_submissions'],
+                str(entry['problems_solved']),
+                str(entry['total_tests_passed']),
+                str(entry['total_submissions']),
                 f"Problem {entry['current_problem']}"
             )
             
@@ -480,10 +471,6 @@ class SpectatorDashboard:
     def update_problem_statistics(self):
         """Update problem statistics"""
         stats = self.data_manager.get_problem_statistics()
-        
-        # Cache existing stat items to avoid full recreation (performance optimization)
-        if not hasattr(self, '_stat_items_cache'):
-            self._stat_items_cache = {}
         
         if not stats:
             # Clear cache and show message
@@ -545,10 +532,8 @@ class SpectatorDashboard:
     
     def animate_refresh_indicator(self):
         """Animate the refresh indicator"""
-        current = self.refresh_indicator.cget("text")
-        indicators = ["🔄", "🔃", "🔄", "🔃"]
-        next_idx = (indicators.index(current) + 1) % len(indicators)
-        self.refresh_indicator.configure(text=indicators[next_idx])
+        self._refresh_toggle = not getattr(self, '_refresh_toggle', False)
+        self.refresh_indicator.configure(text="🔃" if self._refresh_toggle else "🔄")
 
 
 def main():
