@@ -141,18 +141,9 @@ def load_problems(week=None, level=None):
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():
             if 'starter_code' not in problem:
-                problem['starter_code'] = f'''def solution(input_value):
-    """
-    {problem.get('description', 'Solve the problem')}
-    
-    Args:
-        input_value: The input for the problem
-        
-    Returns:
-        The expected output
-    """
-    # Write your code here
-    pass
+                problem['starter_code'] = '''# Read input using input()
+# Compute your answer
+# Print output using print()
 '''
         
         return problems
@@ -162,7 +153,7 @@ def load_problems(week=None, level=None):
 
 # Function to run code with test cases
 def run_code_with_tests(code, test_cases):
-    """Execute code and run test cases"""
+    """Execute competitor code as a script and compare printed output."""
     results = []
     
     for i, test in enumerate(test_cases):
@@ -228,47 +219,39 @@ def run_code_with_tests(code, test_cases):
 
             exec_globals['input'] = mock_input
             
-            # Execute the code
+            # Feed test input through input() calls in user code.
+            raw_input = test.get('input', '')
+            if isinstance(raw_input, (list, tuple)):
+                input_lines = [str(item) for item in raw_input]
+            else:
+                input_text = str(raw_input)
+                input_lines = input_text.splitlines() if input_text else []
+
+            input_index = [0]
+
+            def mock_input(prompt=''):
+                if input_index[0] < len(input_lines):
+                    value = input_lines[input_index[0]]
+                    input_index[0] += 1
+                    return value
+                return ''
+
+            exec_globals['input'] = mock_input
+
+            # Execute code as script and capture printed output.
             with contextlib.redirect_stdout(stdout_capture):
                 exec(code, exec_globals)
-            
-            # Get the solution function (assume it's named 'solution')
-            if 'solution' not in exec_globals:
-                results.append({
-                    'test_num': i + 1,
-                    'passed': False,
-                    'input': test['input'],
-                    'expected': test['output'],
-                    'output': 'Error: No function named "solution" found',
-                    'error': 'Function not found'
-                })
-                continue
-            
-            solution_func = exec_globals['solution']
-            
-            # Parse input - keep as string for most problems
-            input_val = test['input']
-            
-            # Run the function
-            if isinstance(input_val, list):
-                # Multiple arguments
-                output = solution_func(*input_val)
-            else:
-                # Single argument
-                output = solution_func(input_val)
-            
-            # Get expected output
-            expected = test['output']
-            
-            # Compare output (handle both exact match and string comparison)
-            passed = (output == expected) or (str(output).strip() == str(expected).strip())
+
+            output = stdout_capture.getvalue().strip()
+            expected = str(test.get('output', '')).strip()
+            passed = output == expected
             
             results.append({
                 'test_num': i + 1,
                 'passed': passed,
                 'input': str(test['input']),
                 'expected': str(expected),
-                'output': str(output),
+                'output': output,
                 'error': None
             })
             
@@ -598,7 +581,7 @@ else:
                 value=st.session_state.code,
                 height=400,
                 key="code_editor",
-                help="Define a function named 'solution' that solves the problem"
+                help="Write normal Python code that reads input() and prints output"
             )
             st.session_state.code = code
             
