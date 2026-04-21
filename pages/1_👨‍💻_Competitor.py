@@ -12,6 +12,7 @@ import io
 import contextlib
 import time
 import importlib
+import html
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -111,6 +112,9 @@ def get_data_manager():
 
 data_manager = get_data_manager()
 
+# Live rejection notifications refresh every 10 seconds.
+NOTIFICATION_REFRESH_SECONDS = 10
+
 # Initialize session state
 if 'competitor_name' not in st.session_state:
     st.session_state.competitor_name = None
@@ -126,10 +130,6 @@ if 'user_week' not in st.session_state:
     st.session_state.user_week = None
 if 'user_level' not in st.session_state:
     st.session_state.user_level = None
-if 'competitor_live_notifications_enabled' not in st.session_state:
-    st.session_state.competitor_live_notifications_enabled = True
-if 'competitor_notification_refresh_seconds' not in st.session_state:
-    st.session_state.competitor_notification_refresh_seconds = 10
 
 # Cached problems loader
 @st.cache_data(ttl=3600)  # Cache problems for 1 hour (they never change)
@@ -299,8 +299,7 @@ def get_cached_competitor_data(competitor_name):
     """Get competitor data with session-level cache to reduce duplicate reads."""
     cache_key = 'competitor_data_cache'
     now = time.time()
-    refresh_seconds = int(st.session_state.get('competitor_notification_refresh_seconds', 10) or 10)
-    ttl_seconds = max(2, min(refresh_seconds, 30))
+    ttl_seconds = NOTIFICATION_REFRESH_SECONDS
 
     cache = st.session_state.get(cache_key)
     if isinstance(cache, dict):
@@ -462,32 +461,21 @@ else:
     competitor_name = st.session_state.competitor_name
     use_blocking_auto_refresh = False
 
-    if st.session_state.competitor_live_notifications_enabled:
-        st_autorefresh_fn = get_streamlit_autorefresh_fn()
-        if st_autorefresh_fn is not None:
-            st_autorefresh_fn(
-                interval=int(st.session_state.competitor_notification_refresh_seconds) * 1000,
-                key="competitor_live_notification_refresh",
-            )
-        else:
-            use_blocking_auto_refresh = True
+    st_autorefresh_fn = get_streamlit_autorefresh_fn()
+    if st_autorefresh_fn is not None:
+        st_autorefresh_fn(
+            interval=NOTIFICATION_REFRESH_SECONDS * 1000,
+            key="competitor_live_notification_refresh",
+        )
+    else:
+        use_blocking_auto_refresh = True
     
     # Sidebar
     with st.sidebar:
         st.markdown(f"### 👤 {competitor_name}")
 
         st.markdown("### 🔔 Live Alerts")
-        st.toggle(
-            "Live rejection notifications",
-            key="competitor_live_notifications_enabled",
-            help="Auto-check for judge rejections while you stay on any problem",
-        )
-        st.slider(
-            "Alert refresh (seconds)",
-            min_value=5,
-            max_value=120,
-            key="competitor_notification_refresh_seconds",
-        )
+        st.caption("Live rejection checks run automatically every 10 seconds.")
         if st.button("Check notifications now", use_container_width=True):
             invalidate_cached_competitor_data()
             st.rerun()
@@ -537,14 +525,20 @@ else:
 
         if new_notices:
             for notice in new_notices[-3:]:
-                st.toast(f"Problem {notice['problem_id']}: {notice['problem_name']}")
+                problem_id_text = html.escape(str(notice['problem_id']))
+                problem_name_text = html.escape(str(notice['problem_name']))
+                st.toast(f"Problem rejected: Problem {problem_id_text}: {problem_name_text}")
 
         for notice in rejection_notifications:
             st.session_state.seen_rejection_notification_ids.add(get_notification_identity(notice))
 
         st.markdown("### 🔔 Judge Notifications")
         for notice in reversed(rejection_notifications[-5:]):
-            st.warning(f"Problem {notice['problem_id']}: {notice['problem_name']}")
+            problem_id_text = html.escape(str(notice['problem_id']))
+            problem_name_text = html.escape(str(notice['problem_name']))
+            st.error(
+                f"Problem rejected: Your submission for Problem {problem_id_text}: {problem_name_text} was rejected by the judge."
+            )
 
     # Main content
     # Load problems filtered by user's week and level
@@ -827,6 +821,6 @@ else:
 st.markdown("---")
 st.caption("💡 Tip: Test your code before submitting to ensure all test cases pass!")
 
-if st.session_state.get('competitor_name') and st.session_state.get('competitor_live_notifications_enabled') and use_blocking_auto_refresh:
-    time.sleep(float(st.session_state.get('competitor_notification_refresh_seconds', 10)))
+if st.session_state.get('competitor_name') and use_blocking_auto_refresh:
+    time.sleep(float(NOTIFICATION_REFRESH_SECONDS))
     st.rerun()
