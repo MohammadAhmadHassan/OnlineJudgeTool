@@ -214,6 +214,19 @@ def run_code_with_tests(code, test_cases):
                 exec_globals['deque'] = deque
             except ImportError:
                 pass
+
+            # Provide deterministic input() values from the active test case.
+            input_lines = str(test.get('input', '')).strip().split('\n')
+            input_index = [0]
+
+            def mock_input(prompt=''):
+                if input_index[0] < len(input_lines):
+                    value = input_lines[input_index[0]]
+                    input_index[0] += 1
+                    return value
+                return ''
+
+            exec_globals['input'] = mock_input
             
             # Execute the code
             with contextlib.redirect_stdout(stdout_capture):
