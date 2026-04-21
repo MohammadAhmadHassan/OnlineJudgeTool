@@ -60,20 +60,28 @@ class CompetitionDataManager:
         data["start_time"] = datetime.now().isoformat()
         self.save_data(data)
     
-    def register_competitor(self, name: str) -> bool:
+    def register_competitor(self, name: str, week: int = None, level: int = None) -> bool:
         """Register a new competitor"""
         data = self.load_data()
         
         if name in data["competitors"]:
             return False  # Competitor already exists
         
-        data["competitors"][name] = {
+        competitor_data = {
             "name": name,
             "joined_at": datetime.now().isoformat(),
             "current_problem": 1,
             "problems": {},
             "last_activity": datetime.now().isoformat()
         }
+        
+        # Add week and level if provided
+        if week is not None:
+            competitor_data["week"] = week
+        if level is not None:
+            competitor_data["level"] = level
+        
+        data["competitors"][name] = competitor_data
         self.save_data(data)
         return True
     
