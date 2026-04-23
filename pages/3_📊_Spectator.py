@@ -108,6 +108,26 @@ st.markdown("""
     .rank-1 { background: #FFD700; color: #000; }
     .rank-2 { background: #C0C0C0; color: #000; }
     .rank-3 { background: #CD7F32; color: #fff; }
+    .live-timer-card {
+        background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+        border-radius: 16px;
+        color: white;
+        padding: 1.35rem 1.75rem;
+        text-align: center;
+        box-shadow: 0 8px 16px rgba(34, 197, 94, 0.25);
+    }
+    .live-timer-title {
+        font-size: 1.05rem;
+        opacity: 0.95;
+        margin-bottom: 0.45rem;
+        font-weight: 600;
+    }
+    .live-timer-value {
+        font-size: 3.25rem;
+        font-weight: 800;
+        line-height: 1.1;
+        letter-spacing: 0.04em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,6 +157,20 @@ def get_cached_leaderboard():
 
 if 'spectator_refresh_seconds' not in st.session_state:
     st.session_state.spectator_refresh_seconds = DEFAULT_SPECTATOR_REFRESH_SECONDS
+if 'spectator_timer_running' not in st.session_state:
+    st.session_state.spectator_timer_running = False
+if 'spectator_timer_started_at' not in st.session_state:
+    st.session_state.spectator_timer_started_at = 0.0
+if 'spectator_timer_elapsed_seconds' not in st.session_state:
+    st.session_state.spectator_timer_elapsed_seconds = 0.0
+
+
+def _format_elapsed_time(total_seconds):
+    total_seconds = max(0, int(total_seconds))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 refresh_col1, refresh_col2 = st.columns([2, 3])
 with refresh_col1:
@@ -151,10 +185,60 @@ with refresh_col2:
 
 refresh_seconds = max(1, int(st.session_state.spectator_refresh_seconds))
 
+timer_btn_col1, timer_btn_col2, timer_btn_col3, timer_view_col = st.columns([0.7, 0.7, 0.7, 4.2])
+with timer_btn_col1:
+    if st.button("▶ Start", use_container_width=False, key="spectator_start_timer"):
+        if not st.session_state.spectator_timer_running:
+            st.session_state.spectator_timer_started_at = time.time()
+            st.session_state.spectator_timer_running = True
+        st.rerun()
+
+with timer_btn_col2:
+    if st.button("⏸ Stop", use_container_width=False, key="spectator_stop_timer"):
+        if st.session_state.spectator_timer_running:
+            running_chunk = time.time() - float(st.session_state.spectator_timer_started_at)
+            st.session_state.spectator_timer_elapsed_seconds += max(0.0, running_chunk)
+            st.session_state.spectator_timer_running = False
+            st.session_state.spectator_timer_started_at = 0.0
+        st.rerun()
+
+with timer_btn_col3:
+    if st.button("↺ Reset", use_container_width=False, key="spectator_reset_timer"):
+        st.session_state.spectator_timer_running = False
+        st.session_state.spectator_timer_started_at = 0.0
+        st.session_state.spectator_timer_elapsed_seconds = 0.0
+        st.rerun()
+
+with timer_view_col:
+    elapsed_seconds = float(st.session_state.spectator_timer_elapsed_seconds)
+    if st.session_state.spectator_timer_running:
+        elapsed_seconds += time.time() - float(st.session_state.spectator_timer_started_at)
+    elapsed_seconds = max(0.0, elapsed_seconds)
+    elapsed_display = _format_elapsed_time(elapsed_seconds)
+    st.markdown(
+        f"""
+        <div class="live-timer-card">
+            <div class="live-timer-title">Competition Timer</div>
+            <div class="live-timer-value">{elapsed_display}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# Backward compatibility for any stale state that only had running + start time.
+if (
+    st.session_state.spectator_timer_running
+    and float(st.session_state.spectator_timer_elapsed_seconds) == 0.0
+    and float(st.session_state.spectator_timer_started_at) == 0.0
+):
+    st.session_state.spectator_timer_started_at = time.time()
+
 use_blocking_refresh = False
 st_autorefresh_fn = get_streamlit_autorefresh_fn()
+# Keep timer smooth: when running, refresh every second regardless of leaderboard slider.
+effective_refresh_seconds = 1 if st.session_state.spectator_timer_running else refresh_seconds
 if st_autorefresh_fn is not None:
-    st_autorefresh_fn(interval=refresh_seconds * 1000, key="spectator_auto_refresh")
+    st_autorefresh_fn(interval=effective_refresh_seconds * 1000, key="spectator_auto_refresh")
 else:
     use_blocking_refresh = True
 
@@ -328,9 +412,11 @@ else:
 
 # Footer
 st.markdown("---")
-second_label = "second" if refresh_seconds == 1 else "seconds"
-st.caption(f"🔄 Auto-refreshing every {refresh_seconds} {second_label} | Last update: {datetime.now().strftime('%H:%M:%S')}")
+second_label = "second" if effective_refresh_seconds == 1 else "seconds"
+st.caption(
+    f"🔄 Auto-refreshing every {effective_refresh_seconds} {second_label} | Last update: {datetime.now().strftime('%H:%M:%S')}"
+)
 
 if use_blocking_refresh:
-    time.sleep(float(refresh_seconds))
+    time.sleep(float(effective_refresh_seconds))
     st.rerun()
