@@ -25,6 +25,7 @@ def get_data_manager():
     return create_data_manager()
 
 data_manager = get_data_manager()
+backend_type = data_manager.get_backend_type() if hasattr(data_manager, "get_backend_type") else "unknown"
 
 # Admin password
 admin_password = st.secrets.get("ADMIN_PASSWORD", "admin123")
@@ -49,6 +50,7 @@ else:
     
     with tab1:
         st.markdown("### 📤 Upload Problems to Firebase")
+        st.caption(f"Backend: `{backend_type}`")
         
         st.info("💡 Upload JSON file with structure like `{'session1': [...]}` or `{'FinalCompetion': [...]}`")
         
@@ -80,13 +82,62 @@ else:
                 # Upload button
                 if st.button("🚀 Upload to Firebase", type="primary"):
                     with st.spinner("Uploading..."):
-                        success = data_manager.upload_problems(problems_data=problems_data, level=upload_level)
-                        
-                        if success:
-                            st.success(f"🎉 Level {upload_level} problems uploaded successfully!")
-                            st.info(f"Documents created with names like: level{upload_level}_session1 or level{upload_level}_FinalCompetion.")
-                        else:
-                            st.error("❌ Failed to upload problems")
+                        try:
+                            success = False
+                            uploaded_collections = []
+                            failed_collections = []
+
+                            # Normalize dictionary uploads into per-collection list uploads.
+                            # This is backward compatible with older backends that only
+                            # accept session* keys in dict mode.
+                            if isinstance(problems_data, dict):
+                                collections = {
+                                    key: value for key, value in problems_data.items()
+                                    if isinstance(value, list)
+                                }
+
+                                if not collections:
+                                    st.error("❌ No valid problem lists found in the uploaded JSON.")
+                                else:
+                                    for collection_name, problems_list in collections.items():
+                                        ok = data_manager.upload_problems(
+                                            problems_data=problems_list,
+                                            session_name=collection_name,
+                                            level=upload_level
+                                        )
+                                        if ok:
+                                            uploaded_collections.append(collection_name)
+                                        else:
+                                            failed_collections.append(collection_name)
+                                    success = len(failed_collections) == 0
+
+                            # Also allow direct list JSON upload (single collection).
+                            elif isinstance(problems_data, list):
+                                default_collection = "session1"
+                                success = data_manager.upload_problems(
+                                    problems_data=problems_data,
+                                    session_name=default_collection,
+                                    level=upload_level
+                                )
+                                if success:
+                                    uploaded_collections.append(default_collection)
+                                else:
+                                    failed_collections.append(default_collection)
+                            else:
+                                st.error("❌ Invalid JSON format. Expected an object or an array.")
+
+                            if success:
+                                st.success(f"🎉 Level {upload_level} problems uploaded successfully!")
+                                st.info("Uploaded collections: " + ", ".join(uploaded_collections))
+                                st.info(
+                                    f"Documents created with names like: "
+                                    f"level{upload_level}_session1 or level{upload_level}_FinalCompetion."
+                                )
+                            elif failed_collections:
+                                st.error("❌ Failed to upload these collections: " + ", ".join(failed_collections))
+                                st.caption("Tip: verify Firebase credentials and that backend is `firebase`.")
+                        except Exception as e:
+                            st.error(f"❌ Upload error: {e}")
             
             except json.JSONDecodeError as e:
                 st.error(f"❌ Invalid JSON file: {e}")
