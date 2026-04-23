@@ -123,6 +123,15 @@ LEVEL_LABEL_TO_VALUE = {
     "Senior Level": 2,
 }
 
+TEST_CASE_KEYS = [
+    "test_cases",
+    "testCases",
+    "tests",
+    "cases",
+    "public_tests",
+    "test_cases_display_safe",
+]
+
 
 def get_level_label(level_value):
     """Return display label for numeric level."""
@@ -152,6 +161,65 @@ def get_cached_problems(week=None, level=None):
     return data_manager.get_problems(week=week, level=level)
 
 
+def normalize_problem_schema(problem, fallback_level=None, fallback_problem_id=None):
+    """Normalize uploaded problem payloads into the schema expected by competitor UI."""
+    if not isinstance(problem, dict):
+        return None
+
+    normalized = dict(problem)
+
+    # Normalize title/description fields for alternate authoring formats.
+    if not normalized.get("title"):
+        normalized["title"] = "Untitled Problem"
+
+    if not normalized.get("description"):
+        story = str(normalized.get("story", "")).strip()
+        task = str(normalized.get("task", "")).strip()
+        composed = "\n\n".join([part for part in [story, task] if part])
+        normalized["description"] = composed if composed else "No description available"
+
+    # Normalize level field.
+    if "level" not in normalized and fallback_level is not None:
+        normalized["level"] = fallback_level
+
+    # Normalize test cases from multiple possible key names.
+    raw_test_cases = None
+    for key in TEST_CASE_KEYS:
+        candidate = normalized.get(key)
+        if isinstance(candidate, list):
+            raw_test_cases = candidate
+            break
+
+    cleaned_test_cases = []
+    if isinstance(raw_test_cases, list):
+        for test in raw_test_cases:
+            if isinstance(test, dict):
+                test_input = test.get("input", test.get("in", test.get("stdin", "")))
+                test_output = test.get("output", test.get("out", test.get("expected", "")))
+                cleaned_test_cases.append({
+                    "input": str(test_input),
+                    "output": str(test_output),
+                })
+            elif isinstance(test, (list, tuple)) and len(test) >= 2:
+                cleaned_test_cases.append({
+                    "input": str(test[0]),
+                    "output": str(test[1]),
+                })
+
+    normalized["test_cases"] = cleaned_test_cases
+
+    # Ensure numeric id exists.
+    problem_id = normalized.get("id")
+    if not isinstance(problem_id, int):
+        if isinstance(problem_id, str) and problem_id.isdigit():
+            problem_id = int(problem_id)
+            normalized["id"] = problem_id
+        elif fallback_problem_id is not None:
+            normalized["id"] = int(fallback_problem_id)
+
+    return normalized
+
+
 @st.cache_data(ttl=3600)  # Cache named competition problems for 1 hour
 def get_cached_competition_problems(competition_title, level=None):
     """Get problems for a named competition (e.g., FinalCompetion)."""
@@ -166,6 +234,11 @@ def get_cached_competition_problems(competition_title, level=None):
             doc_names_to_try = []
             if level is not None:
                 doc_names_to_try.append(f"level{level}_{competition_title}")
+            # Also probe known level prefixes to tolerate upload-level mismatch.
+            for level_probe in [1, 2, 3, 4, 5]:
+                candidate_name = f"level{level_probe}_{competition_title}"
+                if candidate_name not in doc_names_to_try:
+                    doc_names_to_try.append(candidate_name)
             doc_names_to_try.append(competition_title)
 
             for doc_name in doc_names_to_try:
@@ -179,21 +252,23 @@ def get_cached_competition_problems(competition_title, level=None):
                 auto_problem_id = 1
 
                 for problem in problems_list:
-                    if not isinstance(problem, dict):
+                    normalized = normalize_problem_schema(
+                        problem,
+                        fallback_level=level,
+                        fallback_problem_id=auto_problem_id
+                    )
+                    if not normalized:
                         continue
 
-                    problem_id = problem.get('id')
+                    problem_id = normalized.get('id')
                     if not isinstance(problem_id, int):
                         problem_id = auto_problem_id
-                        problem['id'] = problem_id
+                        normalized['id'] = problem_id
 
                     auto_problem_id += 1
 
-                    if 'level' not in problem and level is not None:
-                        problem['level'] = level
-
-                    if level is None or str(problem.get('level', '')) == str(level):
-                        problems[problem_id] = problem
+                    if level is None or str(normalized.get('level', '')) == str(level):
+                        problems[problem_id] = normalized
 
                 if problems:
                     return problems
@@ -215,21 +290,23 @@ def get_cached_competition_problems(competition_title, level=None):
                 auto_problem_id = 1
 
                 for problem in problems_list:
-                    if not isinstance(problem, dict):
+                    normalized = normalize_problem_schema(
+                        problem,
+                        fallback_level=level,
+                        fallback_problem_id=auto_problem_id
+                    )
+                    if not normalized:
                         continue
 
-                    problem_id = problem.get('id')
+                    problem_id = normalized.get('id')
                     if not isinstance(problem_id, int):
                         problem_id = auto_problem_id
-                        problem['id'] = problem_id
+                        normalized['id'] = problem_id
 
                     auto_problem_id += 1
 
-                    if 'level' not in problem and level is not None:
-                        problem['level'] = level
-
-                    if level is None or str(problem.get('level', '')) == str(level):
-                        problems[problem_id] = problem
+                    if level is None or str(normalized.get('level', '')) == str(level):
+                        problems[problem_id] = normalized
 
                 if problems:
                     return problems
@@ -261,15 +338,35 @@ def load_problems(week=None, level=None, competition_title=None):
         if not problems:
             problems = get_cached_problems(week=week, level=level)
         
-        # Add default starter code to problems that don't have it
+        # Normalize payload and add default starter code.
+        normalized_problems = {}
+        auto_problem_id = 1
         for problem_id, problem in problems.items():
-            if 'starter_code' not in problem:
-                problem['starter_code'] = '''# Read input using input()
+            fallback_problem_id = problem_id
+            if not isinstance(fallback_problem_id, int):
+                if str(fallback_problem_id).isdigit():
+                    fallback_problem_id = int(fallback_problem_id)
+                else:
+                    fallback_problem_id = auto_problem_id
+
+            normalized = normalize_problem_schema(
+                problem,
+                fallback_level=level,
+                fallback_problem_id=fallback_problem_id
+            )
+            if not normalized:
+                continue
+
+            normalized_id = normalized.get("id", auto_problem_id)
+            if 'starter_code' not in normalized:
+                normalized['starter_code'] = '''# Read input using input()
 # Compute your answer
 # Print output using print()
 '''
-        
-        return problems
+            normalized_problems[normalized_id] = normalized
+            auto_problem_id += 1
+
+        return normalized_problems
     except Exception as e:
         st.error(f"Error loading problems from Firebase: {e}")
         return {}
@@ -623,6 +720,18 @@ else:
         level=user_level,
         competition_title=FINAL_COMPETITION_TITLE
     )
+
+    if not problems:
+        st.warning(
+            f"No problems found for `{FINAL_COMPETITION_TITLE}` at "
+            f"{get_level_label(user_level)} (L{user_level})."
+        )
+        st.info(
+            "If your uploaded file is level 2, choose Senior Level and make sure "
+            "you uploaded it with level 2 in Admin."
+        )
+        st.session_state.current_problem = None
+        st.stop()
     
     if st.session_state.current_problem is None:
         # Problem selection view

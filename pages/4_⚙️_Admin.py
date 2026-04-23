@@ -74,10 +74,26 @@ else:
                 # Show preview
                 st.markdown("**Preview:**")
                 if isinstance(problems_data, dict):
+                    detected_levels = set()
                     for collection_key, problems_list in problems_data.items():
                         if isinstance(problems_list, list):
                             num_problems = len(problems_list)
                             st.write(f"- {collection_key}: {num_problems} problems")
+                            for problem in problems_list:
+                                if isinstance(problem, dict):
+                                    level_value = problem.get("level")
+                                    if isinstance(level_value, int):
+                                        detected_levels.add(level_value)
+
+                    if detected_levels:
+                        st.caption("Detected levels in file: " + ", ".join(str(v) for v in sorted(detected_levels)))
+                        if len(detected_levels) == 1:
+                            detected_level = next(iter(detected_levels))
+                            if detected_level != upload_level:
+                                st.warning(
+                                    f"Selected upload level is {upload_level}, but file problems are level {detected_level}. "
+                                    "This mismatch can cause problems not to appear in competitor view."
+                                )
                 
                 # Upload button
                 if st.button("🚀 Upload to Firebase", type="primary"):
