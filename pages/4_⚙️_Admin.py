@@ -50,7 +50,7 @@ else:
     with tab1:
         st.markdown("### 📤 Upload Problems to Firebase")
         
-        st.info("💡 Upload JSON file with problems structure: `{'session1': [...], 'session2': [...]}`")
+        st.info("💡 Upload JSON file with structure like `{'session1': [...]}` or `{'FinalCompetion': [...]}`")
         
         # Level selector
         upload_level = st.selectbox(
@@ -71,10 +71,11 @@ else:
                 
                 # Show preview
                 st.markdown("**Preview:**")
-                for session_key in problems_data.keys():
-                    if session_key.startswith('session'):
-                        num_problems = len(problems_data[session_key])
-                        st.write(f"- {session_key}: {num_problems} problems")
+                if isinstance(problems_data, dict):
+                    for collection_key, problems_list in problems_data.items():
+                        if isinstance(problems_list, list):
+                            num_problems = len(problems_list)
+                            st.write(f"- {collection_key}: {num_problems} problems")
                 
                 # Upload button
                 if st.button("🚀 Upload to Firebase", type="primary"):
@@ -83,7 +84,7 @@ else:
                         
                         if success:
                             st.success(f"🎉 Level {upload_level} problems uploaded successfully!")
-                            st.info(f"Documents created with names like: level{upload_level}_session1, level{upload_level}_session2, etc.")
+                            st.info(f"Documents created with names like: level{upload_level}_session1 or level{upload_level}_FinalCompetion.")
                         else:
                             st.error("❌ Failed to upload problems")
             

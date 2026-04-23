@@ -114,6 +114,22 @@ data_manager = get_data_manager()
 
 # Live rejection notifications refresh every 10 seconds.
 NOTIFICATION_REFRESH_SECONDS = 10
+FINAL_COMPETITION_TITLE = "FinalCompetition"
+FINAL_COMPETITION_TITLE_ALIASES = ["FinalCompetion"]
+FINAL_COMPETITION_WEEK = 19
+
+LEVEL_LABEL_TO_VALUE = {
+    "Junior Level": 1,
+    "Senior Level": 2,
+}
+
+
+def get_level_label(level_value):
+    """Return display label for numeric level."""
+    for label, value in LEVEL_LABEL_TO_VALUE.items():
+        if value == level_value:
+            return label
+    return "Junior Level"
 
 # Initialize session state
 if 'competitor_name' not in st.session_state:
@@ -124,12 +140,10 @@ if 'code' not in st.session_state:
     st.session_state.code = ""
 if 'test_results' not in st.session_state:
     st.session_state.test_results = None
-if 'url_username_processed' not in st.session_state:
-    st.session_state.url_username_processed = False
 if 'user_week' not in st.session_state:
-    st.session_state.user_week = None
+    st.session_state.user_week = FINAL_COMPETITION_WEEK
 if 'user_level' not in st.session_state:
-    st.session_state.user_level = None
+    st.session_state.user_level = LEVEL_LABEL_TO_VALUE["Junior Level"]
 
 # Cached problems loader
 @st.cache_data(ttl=3600)  # Cache problems for 1 hour (they never change)
@@ -137,12 +151,115 @@ def get_cached_problems(week=None, level=None):
     """Get problems with Streamlit caching"""
     return data_manager.get_problems(week=week, level=level)
 
+
+@st.cache_data(ttl=3600)  # Cache named competition problems for 1 hour
+def get_cached_competition_problems(competition_title, level=None):
+    """Get problems for a named competition (e.g., FinalCompetion)."""
+    if not competition_title:
+        return {}
+
+    # Firebase-specific fast path: read direct collection docs like:
+    # level1_FinalCompetion / level2_FinalCompetion / FinalCompetion
+    if data_manager.is_firebase():
+        backend = getattr(data_manager, 'backend', None)
+        if backend is not None and hasattr(backend, 'problems_ref'):
+            doc_names_to_try = []
+            if level is not None:
+                doc_names_to_try.append(f"level{level}_{competition_title}")
+            doc_names_to_try.append(competition_title)
+
+            for doc_name in doc_names_to_try:
+                doc = backend.problems_ref.document(doc_name).get()
+                if not doc.exists:
+                    continue
+
+                data = doc.to_dict() or {}
+                problems_list = data.get('problems', [])
+                problems = {}
+                auto_problem_id = 1
+
+                for problem in problems_list:
+                    if not isinstance(problem, dict):
+                        continue
+
+                    problem_id = problem.get('id')
+                    if not isinstance(problem_id, int):
+                        problem_id = auto_problem_id
+                        problem['id'] = problem_id
+
+                    auto_problem_id += 1
+
+                    if 'level' not in problem and level is not None:
+                        problem['level'] = level
+
+                    if level is None or str(problem.get('level', '')) == str(level):
+                        problems[problem_id] = problem
+
+                if problems:
+                    return problems
+
+            # Secondary path: read from all-problems nested docs if present.
+            for doc_name in ['Level1_AllProblems', 'all_problems', 'problems']:
+                doc = backend.problems_ref.document(doc_name).get()
+                if not doc.exists:
+                    continue
+
+                data = doc.to_dict() or {}
+                sessions_data = data.get('sessions', {})
+                if competition_title not in sessions_data:
+                    continue
+
+                session_data = sessions_data.get(competition_title, {})
+                problems_list = session_data.get('problems', [])
+                problems = {}
+                auto_problem_id = 1
+
+                for problem in problems_list:
+                    if not isinstance(problem, dict):
+                        continue
+
+                    problem_id = problem.get('id')
+                    if not isinstance(problem_id, int):
+                        problem_id = auto_problem_id
+                        problem['id'] = problem_id
+
+                    auto_problem_id += 1
+
+                    if 'level' not in problem and level is not None:
+                        problem['level'] = level
+
+                    if level is None or str(problem.get('level', '')) == str(level):
+                        problems[problem_id] = problem
+
+                if problems:
+                    return problems
+
+    return {}
+
 # Function to load problems
-def load_problems(week=None, level=None):
-    """Load problems from Firebase, filtered by week and level"""
+def load_problems(week=None, level=None, competition_title=None):
+    """Load problems using named competition first, then week fallback."""
     try:
-        # Get problems from Firebase (using cache)
-        problems = get_cached_problems(week=week, level=level)
+        problems = {}
+
+        # Primary: named competition collection (FinalCompetion)
+        if competition_title:
+            candidate_titles = [competition_title]
+            for alias in FINAL_COMPETITION_TITLE_ALIASES:
+                if alias not in candidate_titles:
+                    candidate_titles.append(alias)
+
+            for title in candidate_titles:
+                problems = get_cached_competition_problems(
+                    competition_title=title,
+                    level=level
+                )
+                if problems:
+                    break
+
+        # Fallback: week/session-based retrieval (session19)
+        if not problems:
+            problems = get_cached_problems(week=week, level=level)
         
         # Add default starter code to problems that don't have it
         for problem_id, problem in problems.items():
@@ -352,109 +469,46 @@ st.markdown("# 👨‍💻 Competitor Interface")
 # Registration/Login Section
 if st.session_state.competitor_name is None:
     with st.sidebar:
-        st.markdown("### 👤 Competitor")
+        st.markdown("### Competitor")
         st.caption("Register/login from the main panel to activate your dashboard.")
 
-    # Get parameters from session state (captured by streamlit_app_multi.py from URL)
-    url_username = st.session_state.get('url_username', None)
-    url_week = st.session_state.get('url_week', None)
-    url_level = st.session_state.get('url_level', None)
-    
-    # Fallback: try reading from URL if not in session state
-    if not st.session_state.url_username_processed:
-        try:
-            query_params = st.query_params
-            
-            if not url_week:
-                url_week = query_params.get('week', None)
-                if isinstance(url_week, list) and len(url_week) > 0:
-                    url_week = url_week[0]
-                if url_week:
-                    st.session_state.url_week = url_week
-            
-            if not url_username:
-                url_username = query_params.get('username', None)
-                if isinstance(url_username, list) and len(url_username) > 0:
-                    url_username = url_username[0]
-                if url_username:
-                    st.session_state.url_username = url_username
-            
-            if not url_level:
-                url_level = query_params.get('level', None)
-                if isinstance(url_level, list) and len(url_level) > 0:
-                    url_level = url_level[0]
-                if url_level:
-                    st.session_state.url_level = url_level
-        except Exception as e:
-            pass
-        
-        st.session_state.url_username_processed = True
-    
-    st.markdown("## 📝 Registration")
-    
-    if url_username:
-        # Username from URL - show pre-filled, disabled field
-        st.success(f"👤 Welcome from Moodle: **{url_username}**")
-        st.markdown("Your username has been automatically detected from Moodle.")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # Disabled input field showing the URL username
-            st.text_input(
-                "Your Name", 
-                value=url_username,
-                disabled=True,
-                help="Username from Moodle (cannot be changed)"
-            )
-        
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🚀 Start Competition", type="primary", use_container_width=True):
-                # Register with URL username, week, and level
-                week_int = int(url_week) if url_week else None
-                level_int = int(url_level) if url_level else None
-                data_manager.register_competitor(url_username.strip(), week=week_int, level=level_int)
-                st.session_state.competitor_name = url_username.strip()
-                # Store week and level
-                st.session_state.user_week = url_week
-                st.session_state.user_level = url_level
-                # Clear the URL params from session state
-                if 'url_username' in st.session_state:
-                    del st.session_state.url_username
-                if 'url_week' in st.session_state:
-                    del st.session_state.url_week
-                if 'url_level' in st.session_state:
-                    del st.session_state.url_level
-                st.success(f"Welcome, {url_username}! 🎉")
+    st.markdown("## Registration")
+    st.markdown("Enter your name and choose your competition level to start.")
+    st.caption(
+        f"Problems are loaded from final competition: {FINAL_COMPETITION_TITLE} "
+        f"(fallback: session{FINAL_COMPETITION_WEEK})."
+    )
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        name_input = st.text_input("Your Name", placeholder="Enter your full name")
+        level_label = st.selectbox(
+            "Competition Level",
+            options=list(LEVEL_LABEL_TO_VALUE.keys()),
+            index=0,
+            help="Junior Level = level 1, Senior Level = level 2"
+        )
+        selected_level = LEVEL_LABEL_TO_VALUE[level_label]
+
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Start Competition", type="primary", use_container_width=True):
+            if name_input and name_input.strip():
+                competitor_name = name_input.strip()
+                data_manager.register_competitor(
+                    competitor_name,
+                    week=FINAL_COMPETITION_WEEK,
+                    level=selected_level
+                )
+                st.session_state.competitor_name = competitor_name
+                st.session_state.user_week = FINAL_COMPETITION_WEEK
+                st.session_state.user_level = selected_level
+                st.success(f"Welcome, {competitor_name}!")
                 st.rerun()
-        
-        st.markdown("---")
-        st.caption("ℹ️ If this is not your name, please contact your instructor.")
-    
-    else:
-        # No username in URL - show normal registration
-        st.markdown("Enter your name to start competing!")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            name_input = st.text_input("Your Name", placeholder="Enter your full name")
-        
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🚀 Start Competition", type="primary", use_container_width=True):
-                if name_input and name_input.strip():
-                    # Register competitor
-                    data_manager.register_competitor(name_input.strip())
-                    st.session_state.competitor_name = name_input.strip()
-                    st.success(f"Welcome, {name_input}! 🎉")
-                    st.rerun()
-                else:
-                    st.error("Please enter your name")
-        
-        st.markdown("---")
-        st.info("💡 **Tip:** Access this page from Moodle for automatic login!")
+            else:
+                st.error("Please enter your name")
 
 else:
     # Competitor is logged in
@@ -483,6 +537,24 @@ else:
         
         # Get competitor stats
         comp_data = get_cached_competitor_data(competitor_name)
+        selected_level = st.session_state.get('user_level')
+        if selected_level is None and isinstance(comp_data, dict):
+            selected_level = comp_data.get('level')
+        try:
+            selected_level = int(selected_level)
+        except (TypeError, ValueError):
+            selected_level = LEVEL_LABEL_TO_VALUE["Junior Level"]
+        if selected_level not in LEVEL_LABEL_TO_VALUE.values():
+            selected_level = LEVEL_LABEL_TO_VALUE["Junior Level"]
+
+        st.session_state.user_level = selected_level
+        st.session_state.user_week = FINAL_COMPETITION_WEEK
+
+        st.caption(f"Level: {get_level_label(selected_level)} (L{selected_level})")
+        st.caption(
+            f"Competition: {FINAL_COMPETITION_TITLE} "
+            f"(fallback: session{FINAL_COMPETITION_WEEK})"
+        )
         problems_data = comp_data.get('problems', {})
         
         solved_count = sum(
@@ -509,6 +581,8 @@ else:
             st.session_state.competitor_name = None
             st.session_state.current_problem = None
             st.session_state.code = ""
+            st.session_state.user_week = FINAL_COMPETITION_WEEK
+            st.session_state.user_level = LEVEL_LABEL_TO_VALUE["Junior Level"]
             invalidate_cached_competitor_data()
             st.rerun()
 
@@ -542,9 +616,13 @@ else:
 
     # Main content
     # Load problems filtered by user's week and level
-    user_week = st.session_state.get('user_week', None)
-    user_level = st.session_state.get('user_level', None)
-    problems = load_problems(week=user_week, level=user_level)
+    user_week = FINAL_COMPETITION_WEEK
+    user_level = st.session_state.get('user_level', LEVEL_LABEL_TO_VALUE["Junior Level"])
+    problems = load_problems(
+        week=user_week,
+        level=user_level,
+        competition_title=FINAL_COMPETITION_TITLE
+    )
     
     if st.session_state.current_problem is None:
         # Problem selection view

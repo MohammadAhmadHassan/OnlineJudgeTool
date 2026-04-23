@@ -812,21 +812,30 @@ class FirebaseDataManager:
             bool: True if successful
         """
         try:
-            # If problems_data is a dict with session keys, upload accordingly
-            if isinstance(problems_data, dict) and any(key.startswith('session') for key in problems_data.keys()):
-                # Upload each session separately with level prefix
-                for session_key, problems_list in problems_data.items():
-                    if session_key.startswith('session'):
-                        # Add level to document name to prevent overwriting
-                        doc_name = f"level{level}_{session_key}"
-                        doc_ref = self.problems_ref.document(doc_name)
-                        doc_ref.set({
-                            'problems': problems_list,
-                            'updated_at': firestore.SERVER_TIMESTAMP,
-                            'session': session_key,
-                            'level': level
-                        })
-                        print(f"[INFO] Uploaded {len(problems_list)} problems to {doc_name}")
+            # If problems_data is a dict, upload each list-valued key as a collection.
+            # This supports both session keys (session1/session19/...) and named
+            # collections like FinalCompetion / FinalCompetition.
+            if isinstance(problems_data, dict):
+                uploaded_any = False
+                for collection_key, problems_list in problems_data.items():
+                    if not isinstance(problems_list, list):
+                        continue
+
+                    # Add level to document name to prevent overwriting
+                    doc_name = f"level{level}_{collection_key}"
+                    doc_ref = self.problems_ref.document(doc_name)
+                    doc_ref.set({
+                        'problems': problems_list,
+                        'updated_at': firestore.SERVER_TIMESTAMP,
+                        'session': collection_key,
+                        'level': level
+                    })
+                    uploaded_any = True
+                    print(f"[INFO] Uploaded {len(problems_list)} problems to {doc_name}")
+
+                if not uploaded_any:
+                    print(f"[ERROR] Invalid problems_data format")
+                    return False
             
             # If problems_data is a list, upload to specified session
             elif isinstance(problems_data, list):
