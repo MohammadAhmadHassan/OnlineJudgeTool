@@ -5,7 +5,6 @@ pending_review -> under_review -> reviewed
 """
 import os
 import sys
-import time
 import uuid
 import json
 import importlib
@@ -270,6 +269,7 @@ def parse_optional_int(value):
         return None
 
 
+@st.cache_data(ttl=3600)
 def get_problem_definition(problem_id, week=None, level=None):
     """Load problem metadata (title/description) for judge context."""
     problem_key = str(problem_id)
@@ -504,13 +504,15 @@ with st.sidebar:
             st.session_state.confirm_reset = True
             st.warning("Click again to confirm reset")
 
-use_blocking_auto_refresh = False
 if auto_refresh:
     st_autorefresh_fn = get_streamlit_autorefresh_fn()
     if st_autorefresh_fn is not None:
         st_autorefresh_fn(interval=int(refresh_interval_seconds) * 1000, key="judge_auto_refresh")
     else:
-        use_blocking_auto_refresh = True
+        st.caption(
+            "Auto-refresh helper is unavailable in this runtime. "
+            "Use 'Refresh now' for instant updates."
+        )
 
 
 st.title("Judge Review Queue")
@@ -846,7 +848,3 @@ with right_col:
 
 st.markdown("---")
 st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-if use_blocking_auto_refresh:
-    time.sleep(float(refresh_interval_seconds))
-    st.rerun()

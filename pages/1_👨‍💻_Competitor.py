@@ -806,7 +806,6 @@ if st.session_state.competitor_name is None:
 else:
     # Competitor is logged in
     competitor_name = st.session_state.competitor_name
-    use_blocking_auto_refresh = False
 
     st_autorefresh_fn = get_streamlit_autorefresh_fn()
     if st_autorefresh_fn is not None:
@@ -815,7 +814,10 @@ else:
             key="competitor_live_notification_refresh",
         )
     else:
-        use_blocking_auto_refresh = True
+        st.caption(
+            "Live auto-refresh helper is unavailable in this runtime. "
+            "Use 'Check notifications now' for instant updates."
+        )
     
     # Sidebar
     with st.sidebar:
@@ -1222,7 +1224,3 @@ else:
 # Footer
 st.markdown("---")
 st.caption("💡 Tip: Test your code before submitting to ensure all test cases pass!")
-
-if st.session_state.get('competitor_name') and use_blocking_auto_refresh:
-    time.sleep(float(NOTIFICATION_REFRESH_SECONDS))
-    st.rerun()

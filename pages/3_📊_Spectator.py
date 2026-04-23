@@ -233,14 +233,16 @@ if (
 ):
     st.session_state.spectator_timer_started_at = time.time()
 
-use_blocking_refresh = False
 st_autorefresh_fn = get_streamlit_autorefresh_fn()
 # Keep timer smooth: when running, refresh every second regardless of leaderboard slider.
 effective_refresh_seconds = 1 if st.session_state.spectator_timer_running else refresh_seconds
 if st_autorefresh_fn is not None:
     st_autorefresh_fn(interval=effective_refresh_seconds * 1000, key="spectator_auto_refresh")
 else:
-    use_blocking_refresh = True
+    st.caption(
+        "Auto-refresh helper is unavailable in this runtime. "
+        "Use browser refresh for live updates."
+    )
 
 # Header
 st.markdown("# 📊 Live Leaderboard")
@@ -416,7 +418,3 @@ second_label = "second" if effective_refresh_seconds == 1 else "seconds"
 st.caption(
     f"🔄 Auto-refreshing every {effective_refresh_seconds} {second_label} | Last update: {datetime.now().strftime('%H:%M:%S')}"
 )
-
-if use_blocking_refresh:
-    time.sleep(float(effective_refresh_seconds))
-    st.rerun()

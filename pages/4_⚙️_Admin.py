@@ -6,6 +6,9 @@ import streamlit as st
 import json
 import sys
 import os
+import time
+import importlib
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,6 +30,87 @@ def get_data_manager():
 data_manager = get_data_manager()
 backend_type = data_manager.get_backend_type() if hasattr(data_manager, "get_backend_type") else "unknown"
 
+
+def streamlit_autorefresh_available():
+    """Return True when streamlit-autorefresh is installed in this runtime."""
+    try:
+        module = importlib.import_module("streamlit_autorefresh")
+        return hasattr(module, "st_autorefresh")
+    except Exception:
+        return False
+
+
+def run_quick_health_probe():
+    """
+    Low-cost health probe.
+    Intended to keep Firebase reads minimal during live events.
+    """
+    started = time.perf_counter()
+    result = {
+        "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "backend_type": backend_type,
+        "autorefresh_installed": streamlit_autorefresh_available(),
+        "checks": {},
+    }
+
+    # Single lightweight token read (or cached token) for Firebase freshness.
+    if hasattr(data_manager, "get_data_version"):
+        t0 = time.perf_counter()
+        version = data_manager.get_data_version()
+        result["checks"]["data_version"] = {
+            "ok": version is not None,
+            "value": version,
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+
+    result["total_latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    return result
+
+
+def run_deep_health_probe():
+    """
+    Higher-cost probe for troubleshooting only.
+    Can trigger broader backend reads.
+    """
+    started = time.perf_counter()
+    result = run_quick_health_probe()
+    checks = result["checks"]
+
+    if hasattr(data_manager, "get_review_queue"):
+        t0 = time.perf_counter()
+        try:
+            queue = data_manager.get_review_queue()
+            checks["review_queue"] = {
+                "ok": True,
+                "items": len(queue) if isinstance(queue, list) else 0,
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+        except Exception as e:
+            checks["review_queue"] = {
+                "ok": False,
+                "error": str(e),
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+
+    if hasattr(data_manager, "get_leaderboard"):
+        t0 = time.perf_counter()
+        try:
+            leaderboard = data_manager.get_leaderboard()
+            checks["leaderboard"] = {
+                "ok": True,
+                "items": len(leaderboard) if isinstance(leaderboard, list) else 0,
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+        except Exception as e:
+            checks["leaderboard"] = {
+                "ok": False,
+                "error": str(e),
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+
+    result["total_latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    return result
+
 # Admin password
 admin_password = st.secrets.get("ADMIN_PASSWORD", "admin123")
 
@@ -46,7 +130,12 @@ if not st.session_state.admin_authenticated:
             st.error("❌ Invalid password")
 else:
     # Admin is authenticated
-    tab1, tab2, tab3 = st.tabs(["📤 Upload Problems", "📋 View Problems", "🗑️ Delete Problems"])
+    if "admin_last_health_report" not in st.session_state:
+        st.session_state.admin_last_health_report = None
+    if "admin_last_health_probe_type" not in st.session_state:
+        st.session_state.admin_last_health_probe_type = "-"
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload Problems", "📋 View Problems", "🗑️ Delete Problems", "🩺 Health"])
     
     with tab1:
         st.markdown("### 📤 Upload Problems to Firebase")
@@ -239,6 +328,73 @@ else:
                         st.error("❌ Deletion failed")
             else:
                 st.warning("Please specify the session name")
+
+    with tab4:
+        st.markdown("### 🩺 Runtime Health & Fail-Safe")
+        st.caption("Use quick probe during live rounds. Use deep probe only for troubleshooting.")
+
+        health_col1, health_col2, health_col3 = st.columns(3)
+        with health_col1:
+            st.metric("Backend", backend_type)
+        with health_col2:
+            st.metric(
+                "Auto-refresh Dependency",
+                "Installed" if streamlit_autorefresh_available() else "Missing"
+            )
+        with health_col3:
+            latest = st.session_state.admin_last_health_report
+            st.metric("Last Probe", latest.get("ran_at") if isinstance(latest, dict) else "-")
+
+        action_col1, action_col2 = st.columns(2)
+        with action_col1:
+            if st.button("Run Quick Probe (Low Cost)", type="primary", use_container_width=True):
+                st.session_state.admin_last_health_report = run_quick_health_probe()
+                st.session_state.admin_last_health_probe_type = "quick"
+                st.rerun()
+        with action_col2:
+            if st.button("Run Deep Probe (Higher Cost)", use_container_width=True):
+                st.session_state.admin_last_health_report = run_deep_health_probe()
+                st.session_state.admin_last_health_probe_type = "deep"
+                st.rerun()
+
+        report = st.session_state.admin_last_health_report
+        if isinstance(report, dict):
+            st.success(
+                f"Last probe: {st.session_state.admin_last_health_probe_type} | "
+                f"Total latency: {report.get('total_latency_ms', 'N/A')} ms"
+            )
+            st.json(report)
+        else:
+            st.info("No health probe has been run in this session yet.")
+
+        st.markdown("#### Cache Snapshot")
+        backend = getattr(data_manager, "backend", None)
+        if backend is not None and hasattr(backend, "get_cache_stats"):
+            try:
+                cache_stats = backend.get_cache_stats()
+                st.write(f"Total cache entries: {cache_stats.get('total_entries', 0)}")
+                entries = cache_stats.get("entries", {})
+                if isinstance(entries, dict) and entries:
+                    rows = []
+                    for key, value in entries.items():
+                        if isinstance(value, dict):
+                            rows.append({
+                                "key": key,
+                                "age_seconds": value.get("age_seconds"),
+                                "ttl_seconds": value.get("ttl_seconds"),
+                                "remaining_seconds": value.get("remaining_seconds"),
+                                "expired": value.get("expired"),
+                            })
+                    if rows:
+                        st.dataframe(rows, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No cache entry details available.")
+                else:
+                    st.caption("Cache is currently empty.")
+            except Exception as e:
+                st.warning(f"Cache stats unavailable: {e}")
+        else:
+            st.caption("Cache stats are only available on supported backends.")
     
     # Logout
     st.markdown("---")

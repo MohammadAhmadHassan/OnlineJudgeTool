@@ -30,6 +30,8 @@ class FirebaseDataManager:
         if not hasattr(self, 'initialized'):
             self.initialized = False
             self.db = None
+            self._firestore_read_timeout_seconds = 8
+            self._firestore_stream_timeout_seconds = 12
             # Cache configuration
             self._cache = {}
             self._cache_timestamps = {}
@@ -64,6 +66,10 @@ class FirebaseDataManager:
         """Store data in cache with timestamp"""
         self._cache[cache_key] = data
         self._cache_timestamps[cache_key] = datetime.now()
+
+    def _get_stale_cache(self, cache_key: str):
+        """Return cached value even if ttl expired (best-effort fallback)."""
+        return self._cache.get(cache_key)
     
     def _invalidate_cache(self, pattern: str = None):
         """Invalidate cache entries matching pattern or all if None"""
@@ -137,7 +143,7 @@ class FirebaseDataManager:
         """Initialize competition metadata document"""
         try:
             doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._firestore_read_timeout_seconds)
             
             if not doc.exists:
                 doc_ref.set({
@@ -172,7 +178,7 @@ class FirebaseDataManager:
                 return int(cached_version)
 
             doc_ref = self.competition_ref.document('metadata')
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._firestore_read_timeout_seconds)
             version = 0
             if doc.exists:
                 version = int((doc.to_dict() or {}).get('data_version', 0))
@@ -181,6 +187,12 @@ class FirebaseDataManager:
             return version
         except Exception as e:
             print(f"Error reading data version: {e}")
+            stale_version = self._get_stale_cache('data_version')
+            if stale_version is not None:
+                try:
+                    return int(stale_version)
+                except Exception:
+                    pass
             return 0
 
     def get_data_version(self) -> int:
@@ -206,7 +218,7 @@ class FirebaseDataManager:
         try:
             # Check if competitor exists
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._firestore_read_timeout_seconds)
             
             if doc.exists:
                 return False  # Competitor already exists
@@ -490,7 +502,7 @@ class FirebaseDataManager:
             
             # Fetch from database
             doc_ref = self.competitors_ref.document(name)
-            doc = doc_ref.get()
+            doc = doc_ref.get(timeout=self._firestore_read_timeout_seconds)
             
             if doc.exists:
                 data = doc.to_dict()
@@ -500,6 +512,9 @@ class FirebaseDataManager:
             return None
         except Exception as e:
             print(f"Error getting competitor data: {e}")
+            stale_data = self._get_stale_cache(f'competitor_{name}')
+            if stale_data is not None:
+                return stale_data
             return None
     
     def get_all_competitors(self) -> Dict[str, dict]:
@@ -517,7 +532,7 @@ class FirebaseDataManager:
             
             # Fetch from database
             competitors = {}
-            docs = self.competitors_ref.stream()
+            docs = self.competitors_ref.stream(timeout=self._firestore_stream_timeout_seconds)
             
             for doc in docs:
                 competitors[doc.id] = doc.to_dict()
@@ -529,6 +544,9 @@ class FirebaseDataManager:
             return competitors
         except Exception as e:
             print(f"Error getting all competitors: {e}")
+            stale_data = self._get_stale_cache('all_competitors')
+            if stale_data is not None:
+                return stale_data
             return {}
     
     def get_leaderboard(self) -> List[dict]:
