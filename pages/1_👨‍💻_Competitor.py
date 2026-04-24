@@ -18,6 +18,7 @@ import ast
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_manager import create_data_manager
+from firebase_config import FirebaseConfig
 
 # Check if running in single-dashboard mode and hide sidebar navigation
 DASHBOARD_MODE = os.environ.get('DASHBOARD_MODE', None)
@@ -108,11 +109,44 @@ st.markdown("""
 
 # Initialize data manager
 @st.cache_resource
-def get_data_manager():
+def get_data_manager(config_fingerprint=""):
     return create_data_manager()
 
-data_manager = get_data_manager()
+
+def get_firebase_config_fingerprint():
+    """Build a cache key that changes when firebase credential source changes."""
+    FirebaseConfig.load_credentials()
+    source = str(FirebaseConfig.get_last_source() or "none")
+    error = str(FirebaseConfig.get_last_error() or "")
+    mtime_token = "0"
+
+    if source and source != "none" and os.path.exists(source):
+        try:
+            mtime_token = str(os.path.getmtime(source))
+        except Exception:
+            pass
+
+    return f"{source}|{mtime_token}|{error}"
+
+
+data_manager = get_data_manager(get_firebase_config_fingerprint())
+
+# Retry once if credentials look configured but cached manager is still JSON.
+if (
+    data_manager.get_backend_type() == "json"
+    and FirebaseConfig.is_configured()
+    and not st.session_state.get("_firebase_reconnect_retry_done", False)
+):
+    st.session_state["_firebase_reconnect_retry_done"] = True
+    get_data_manager.clear()
+    data_manager = get_data_manager(get_firebase_config_fingerprint())
+
 BACKEND_TYPE = data_manager.get_backend_type()
+BACKEND_DEBUG = (
+    data_manager.get_backend_debug_info()
+    if hasattr(data_manager, "get_backend_debug_info")
+    else {}
+)
 
 # Live rejection notifications refresh every 10 seconds.
 NOTIFICATION_REFRESH_SECONDS = 10
@@ -941,6 +975,14 @@ if st.session_state.competitor_name is None:
         st.markdown("### Competitor")
         st.caption("Register/login from the main panel to activate your dashboard.")
         st.caption(f"Backend: `{BACKEND_TYPE}`")
+        if BACKEND_TYPE == "json":
+            st.warning("Firebase is not active. This view is using local JSON storage.")
+            reason = str(BACKEND_DEBUG.get("firebase_init_error") or "").strip()
+            if reason:
+                st.caption(f"Firebase error: {reason}")
+            source = str(BACKEND_DEBUG.get("firebase_credentials_source") or "").strip()
+            if source:
+                st.caption(f"Credentials source: {source}")
 
     st.markdown("## Registration")
     st.markdown("Enter your name and choose your competition level to start.")
@@ -1000,6 +1042,14 @@ else:
     with st.sidebar:
         st.markdown(f"### 👤 {competitor_name}")
         st.caption(f"Backend: `{BACKEND_TYPE}`")
+        if BACKEND_TYPE == "json":
+            st.warning("Firebase is not active. Firestore problems will not appear.")
+            reason = str(BACKEND_DEBUG.get("firebase_init_error") or "").strip()
+            if reason:
+                st.caption(f"Firebase error: {reason}")
+            source = str(BACKEND_DEBUG.get("firebase_credentials_source") or "").strip()
+            if source:
+                st.caption(f"Credentials source: {source}")
 
         st.markdown("### 🔔 Live Alerts")
         st.caption("Live rejection checks run automatically every 10 seconds.")

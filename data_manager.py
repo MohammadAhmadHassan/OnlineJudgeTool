@@ -21,24 +21,33 @@ class DataManager:
         """Initialize the appropriate data manager"""
         self.backend = None
         self.backend_type = None
+        self.firebase_init_error = None
+        self.firebase_credentials_source = None
         self._initialize_backend()
     
     def _initialize_backend(self):
         """Choose and initialize the appropriate backend"""
         # Try Firebase first
         if FirebaseConfig.is_configured():
+            self.firebase_credentials_source = FirebaseConfig.get_last_source()
             try:
                 from firebase_data_manager import FirebaseDataManager
                 self.backend = FirebaseDataManager()
                 self.backend_type = "firebase"
-                print("[OK] Connected to Firebase Firestore")
+                source = self.firebase_credentials_source or "unknown source"
+                print(f"[OK] Connected to Firebase Firestore (credentials: {source})")
                 return
             except Exception as e:
+                self.firebase_init_error = str(e)
                 print(f"[WARNING] Firebase initialization failed: {e}")
                 print("[INFO] Falling back to local JSON storage")
         else:
+            self.firebase_credentials_source = FirebaseConfig.get_last_source()
+            self.firebase_init_error = FirebaseConfig.get_last_error()
             print("[INFO] Firebase not configured, using local JSON storage")
             print("  To use Firebase: Create 'firebase_credentials.json' with your service account key")
+            if self.firebase_init_error:
+                print(f"[INFO] Firebase config details: {self.firebase_init_error}")
         
         # Fallback to JSON
         from competition_data_manager import CompetitionDataManager
@@ -56,6 +65,15 @@ class DataManager:
     def is_json(self) -> bool:
         """Check if using JSON backend"""
         return self.backend_type == "json"
+
+    def get_backend_debug_info(self) -> dict:
+        """Return backend diagnostics useful for UI/debugging."""
+        return {
+            "backend_type": self.backend_type,
+            "firebase_credentials_source": self.firebase_credentials_source,
+            "firebase_init_error": self.firebase_init_error,
+            "firebase_candidate_paths": FirebaseConfig.get_candidate_config_paths(),
+        }
     
     # Proxy all methods to the backend
     
