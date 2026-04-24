@@ -162,6 +162,70 @@ def get_cached_problems(week=None, level=None):
     return data_manager.get_problems(week=week, level=level)
 
 
+def _extract_level_from_collection_name(collection_name):
+    """Extract numeric level from collection names like level1_session13."""
+    name = str(collection_name or "").strip()
+    lower_name = name.lower()
+
+    if not lower_name.startswith("level") or "_" not in name:
+        return None
+
+    underscore_index = name.find("_")
+    level_part = name[5:underscore_index]
+    if level_part.isdigit():
+        return int(level_part)
+    return None
+
+
+def _strip_level_prefix(collection_name):
+    """Return collection without level prefix (level1_session13 -> session13)."""
+    name = str(collection_name or "").strip()
+    parsed_level = _extract_level_from_collection_name(name)
+    if parsed_level is None:
+        return name
+    return name[name.find("_") + 1:]
+
+
+def _is_session_collection_name(collection_name):
+    """Check whether the collection key is a session key like session13."""
+    key = _strip_level_prefix(collection_name).strip().lower()
+    return key.startswith("session") and key[7:].isdigit()
+
+
+def _get_session_sort_key(collection_name):
+    """Session-aware sort key so session2 comes before session10."""
+    key = _strip_level_prefix(collection_name).strip().lower()
+    if key.startswith("session") and key[7:].isdigit():
+        return int(key[7:])
+    return 10**9
+
+
+def _add_problem_to_map(problem_map, problem, level=None):
+    """Normalize and insert a problem while keeping ids unique."""
+    next_auto_id = max(problem_map.keys(), default=0) + 1
+    normalized = normalize_problem_schema(
+        problem,
+        fallback_level=level,
+        fallback_problem_id=next_auto_id
+    )
+    if not normalized:
+        return
+
+    if level is not None and str(normalized.get("level", "")) != str(level):
+        return
+
+    problem_id = normalized.get("id")
+    if not isinstance(problem_id, int):
+        problem_id = next_auto_id
+        normalized["id"] = problem_id
+
+    while problem_id in problem_map:
+        problem_id += 1
+        normalized["id"] = problem_id
+
+    problem_map[problem_id] = normalized
+
+
 def normalize_problem_schema(problem, fallback_level=None, fallback_problem_id=None):
     """Normalize uploaded problem payloads into the schema expected by competitor UI."""
     if not isinstance(problem, dict):
@@ -314,29 +378,121 @@ def get_cached_competition_problems(competition_title, level=None):
 
     return {}
 
+
+@st.cache_data(ttl=3600)  # Cache non-final session problems for 1 hour
+def get_cached_non_final_level_problems(level=None):
+    """Load all session* problems for the selected level, excluding final collections."""
+    problems = {}
+    requested_level = None
+    if level is not None:
+        try:
+            requested_level = int(level)
+        except (TypeError, ValueError):
+            requested_level = None
+
+    if data_manager.is_firebase():
+        backend = getattr(data_manager, 'backend', None)
+        if backend is not None and hasattr(backend, 'problems_ref'):
+            # Primary path: level/session documents (e.g., level1_session13).
+            session_docs = {}
+            for doc in backend.problems_ref.stream():
+                doc_name = str(getattr(doc, "id", "")).strip()
+                if not _is_session_collection_name(doc_name):
+                    continue
+
+                doc_level = _extract_level_from_collection_name(doc_name)
+                if requested_level is not None and doc_level is not None and doc_level != requested_level:
+                    continue
+
+                session_key = _strip_level_prefix(doc_name).strip().lower()
+                candidates = session_docs.setdefault(session_key, [])
+                candidates.append((doc_level, doc))
+
+            for session_key in sorted(session_docs.keys(), key=_get_session_sort_key):
+                candidates = session_docs.get(session_key, [])
+                if not candidates:
+                    continue
+
+                chosen_doc = None
+                if requested_level is not None:
+                    for candidate_level, candidate_doc in candidates:
+                        if candidate_level == requested_level:
+                            chosen_doc = candidate_doc
+                            break
+
+                if chosen_doc is None:
+                    for candidate_level, candidate_doc in candidates:
+                        if candidate_level is None:
+                            chosen_doc = candidate_doc
+                            break
+
+                if chosen_doc is None:
+                    chosen_doc = candidates[0][1]
+
+                doc_data = chosen_doc.to_dict() or {}
+                problems_list = doc_data.get("problems", [])
+                if not isinstance(problems_list, list):
+                    continue
+
+                for problem in problems_list:
+                    _add_problem_to_map(problems, problem, level=requested_level)
+
+            if problems:
+                return problems
+
+            # Secondary path: all-problems style docs that keep session keys.
+            for doc_name in ['Level1_AllProblems', 'Level1_AllProblems_Fixed', 'all_problems', 'problems']:
+                doc = backend.problems_ref.document(doc_name).get()
+                if not doc.exists:
+                    continue
+
+                doc_data = doc.to_dict() or {}
+                sessions_data = doc_data.get("sessions")
+                if isinstance(sessions_data, dict):
+                    source_sessions = sessions_data
+                else:
+                    source_sessions = doc_data
+
+                if not isinstance(source_sessions, dict):
+                    continue
+
+                for session_key in sorted(source_sessions.keys(), key=_get_session_sort_key):
+                    if not _is_session_collection_name(session_key):
+                        continue
+
+                    session_value = source_sessions.get(session_key)
+                    if isinstance(session_value, dict):
+                        problems_list = session_value.get("problems", [])
+                    elif isinstance(session_value, list):
+                        problems_list = session_value
+                    else:
+                        continue
+
+                    if not isinstance(problems_list, list):
+                        continue
+
+                    for problem in problems_list:
+                        _add_problem_to_map(problems, problem, level=requested_level)
+
+                if problems:
+                    return problems
+
+    # Generic fallback (non-Firebase backends).
+    fallback_problems = get_cached_problems(week=None, level=requested_level)
+    for _, problem in fallback_problems.items():
+        _add_problem_to_map(problems, problem, level=requested_level)
+    return problems
+
+
 # Function to load problems
 def load_problems(week=None, level=None, competition_title=None):
-    """Load problems using named competition first, then week fallback."""
+    """Load all non-final competition problems for the selected level."""
     try:
-        problems = {}
+        # We intentionally load session* collections only to exclude final competition sets.
+        problems = get_cached_non_final_level_problems(level=level)
 
-        # Primary: named competition collection (FinalCompetion)
-        if competition_title:
-            candidate_titles = [competition_title]
-            for alias in FINAL_COMPETITION_TITLE_ALIASES:
-                if alias not in candidate_titles:
-                    candidate_titles.append(alias)
-
-            for title in candidate_titles:
-                problems = get_cached_competition_problems(
-                    competition_title=title,
-                    level=level
-                )
-                if problems:
-                    break
-
-        # Fallback: week/session-based retrieval (session19)
-        if not problems:
+        # Optional fallback to preserve old call behavior when a specific week is provided.
+        if not problems and week is not None:
             problems = get_cached_problems(week=week, level=level)
         
         # Normalize payload and add default starter code.
@@ -768,8 +924,8 @@ if st.session_state.competitor_name is None:
     st.markdown("## Registration")
     st.markdown("Enter your name and choose your competition level to start.")
     st.caption(
-        f"Problems are loaded from final competition: {FINAL_COMPETITION_TITLE} "
-        f"(fallback: session{FINAL_COMPETITION_WEEK})."
+        "Problems are loaded from all session collections for your level "
+        "(for example: session1, session13, ...), excluding final competition collections."
     )
 
     col1, col2 = st.columns([2, 1])
@@ -847,8 +1003,7 @@ else:
 
         st.caption(f"Level: {get_level_label(selected_level)} (L{selected_level})")
         st.caption(
-            f"Competition: {FINAL_COMPETITION_TITLE} "
-            f"(fallback: session{FINAL_COMPETITION_WEEK})"
+            "Question source: all level sessions (excluding final competition collections)"
         )
         problems_data = comp_data.get('problems', {})
         
@@ -910,23 +1065,20 @@ else:
             )
 
     # Main content
-    # Load problems filtered by user's week and level
-    user_week = FINAL_COMPETITION_WEEK
+    # Load all non-final session problems for the user's level.
     user_level = st.session_state.get('user_level', LEVEL_LABEL_TO_VALUE["Junior Level"])
     problems = load_problems(
-        week=user_week,
-        level=user_level,
-        competition_title=FINAL_COMPETITION_TITLE
+        level=user_level
     )
 
     if not problems:
         st.warning(
-            f"No problems found for `{FINAL_COMPETITION_TITLE}` at "
+            f"No non-final session problems found for "
             f"{get_level_label(user_level)} (L{user_level})."
         )
         st.info(
             "If your uploaded file is level 2, choose Senior Level and make sure "
-            "you uploaded it with level 2 in Admin."
+            "you uploaded level 2 session collections in Admin."
         )
         st.session_state.current_problem = None
         st.stop()
