@@ -112,6 +112,7 @@ def get_data_manager():
     return create_data_manager()
 
 data_manager = get_data_manager()
+BACKEND_TYPE = data_manager.get_backend_type()
 
 # Live rejection notifications refresh every 10 seconds.
 NOTIFICATION_REFRESH_SECONDS = 10
@@ -224,6 +225,26 @@ def _add_problem_to_map(problem_map, problem, level=None):
         normalized["id"] = problem_id
 
     problem_map[problem_id] = normalized
+
+
+def _extract_problem_entries(payload):
+    """Return a normalized list of problem dicts from mixed payload shapes."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+
+    if isinstance(payload, dict):
+        # Common shape: {"problems": [...]} or {"problems": {...}}.
+        if "problems" in payload:
+            return _extract_problem_entries(payload.get("problems"))
+
+        # Direct problem map shape: {"1": {...}, "2": {...}}
+        entries = []
+        for value in payload.values():
+            if isinstance(value, dict):
+                entries.append(value)
+        return entries
+
+    return []
 
 
 def normalize_problem_schema(problem, fallback_level=None, fallback_problem_id=None):
@@ -430,9 +451,7 @@ def get_cached_non_final_level_problems(level=None):
                     chosen_doc = candidates[0][1]
 
                 doc_data = chosen_doc.to_dict() or {}
-                problems_list = doc_data.get("problems", [])
-                if not isinstance(problems_list, list):
-                    continue
+                problems_list = _extract_problem_entries(doc_data)
 
                 for problem in problems_list:
                     _add_problem_to_map(problems, problem, level=requested_level)
@@ -461,15 +480,7 @@ def get_cached_non_final_level_problems(level=None):
                         continue
 
                     session_value = source_sessions.get(session_key)
-                    if isinstance(session_value, dict):
-                        problems_list = session_value.get("problems", [])
-                    elif isinstance(session_value, list):
-                        problems_list = session_value
-                    else:
-                        continue
-
-                    if not isinstance(problems_list, list):
-                        continue
+                    problems_list = _extract_problem_entries(session_value)
 
                     for problem in problems_list:
                         _add_problem_to_map(problems, problem, level=requested_level)
@@ -490,6 +501,15 @@ def load_problems(week=None, level=None, competition_title=None):
     try:
         # We intentionally load session* collections only to exclude final competition sets.
         problems = get_cached_non_final_level_problems(level=level)
+
+        # If cache is stale/empty, retry once after clearing problem caches.
+        if not problems:
+            try:
+                get_cached_non_final_level_problems.clear()
+                get_cached_problems.clear()
+            except Exception:
+                pass
+            problems = get_cached_non_final_level_problems(level=level)
 
         # Optional fallback to preserve old call behavior when a specific week is provided.
         if not problems and week is not None:
@@ -920,6 +940,7 @@ if st.session_state.competitor_name is None:
     with st.sidebar:
         st.markdown("### Competitor")
         st.caption("Register/login from the main panel to activate your dashboard.")
+        st.caption(f"Backend: `{BACKEND_TYPE}`")
 
     st.markdown("## Registration")
     st.markdown("Enter your name and choose your competition level to start.")
@@ -978,6 +999,7 @@ else:
     # Sidebar
     with st.sidebar:
         st.markdown(f"### 👤 {competitor_name}")
+        st.caption(f"Backend: `{BACKEND_TYPE}`")
 
         st.markdown("### 🔔 Live Alerts")
         st.caption("Live rejection checks run automatically every 10 seconds.")
