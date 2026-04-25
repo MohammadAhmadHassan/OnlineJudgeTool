@@ -532,6 +532,8 @@ def _parse_token(token):
 def _parse_function_args(raw_input, expected_param_count=None):
     """Convert test input into function args/kwargs."""
     if isinstance(raw_input, dict):
+        if expected_param_count == 1 or expected_param_count is None:
+            return [dict(raw_input)], {}
         return [], dict(raw_input)
     if isinstance(raw_input, (list, tuple)):
         if expected_param_count == 1:
@@ -546,6 +548,8 @@ def _parse_function_args(raw_input, expected_param_count=None):
     parsed_all = _try_parse_value(stripped)
     if parsed_all is not _UNPARSED:
         if isinstance(parsed_all, dict):
+            if expected_param_count == 1 or expected_param_count is None:
+                return [parsed_all], {}
             return [], parsed_all
         if isinstance(parsed_all, tuple):
             return list(parsed_all), {}
@@ -561,6 +565,24 @@ def _parse_function_args(raw_input, expected_param_count=None):
         parsed_lines = [_parse_token(line) for line in lines]
         if expected_param_count == 1:
             return [parsed_lines], {}
+        if expected_param_count and len(parsed_lines) == expected_param_count:
+            return parsed_lines, {}
+        if expected_param_count and len(parsed_lines) > expected_param_count:
+            # Common imported format packs list-like args as newline-delimited values.
+            # Example (2 params): many signal values + final target.
+            if expected_param_count == 2:
+                return [parsed_lines[:-1], parsed_lines[-1]], {}
+            # Example (3 params): train_X (list), train_y (many scalar lines), test_X (list).
+            if (
+                expected_param_count == 3
+                and isinstance(parsed_lines[0], (list, tuple, dict))
+                and isinstance(parsed_lines[-1], (list, tuple, dict))
+            ):
+                return [parsed_lines[0], parsed_lines[1:-1], parsed_lines[-1]], {}
+
+            overflow = len(parsed_lines) - expected_param_count + 1
+            grouped_first_arg = parsed_lines[:overflow]
+            return [grouped_first_arg] + parsed_lines[overflow:], {}
         return parsed_lines, {}
 
     line = lines[0] if lines else stripped
@@ -704,10 +726,10 @@ def run_code_with_tests(code, test_cases, input_format=None):
                     output, expected, passed = script_attempt
                 elif function_attempt:
                     output, expected, passed = function_attempt
-                elif script_attempt:
-                    output, expected, passed = script_attempt
                 elif function_exception is not None:
                     raise function_exception
+                elif script_attempt:
+                    output, expected, passed = script_attempt
                 elif script_exception is not None:
                     raise script_exception
                 else:
