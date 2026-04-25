@@ -474,6 +474,29 @@ def _extract_function_spec(input_format):
     return function_name, expected_param_count
 
 
+def _infer_function_spec_from_code(code):
+    """Infer a top-level function signature from user code when metadata is missing."""
+    try:
+        tree = ast.parse(code)
+    except Exception:
+        return None, None
+
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+
+        function_name = getattr(node, 'name', None)
+        if not function_name or not function_name.isidentifier():
+            continue
+
+        posonly_args = list(getattr(node.args, 'posonlyargs', []))
+        regular_args = list(node.args.args)
+        expected_param_count = len(posonly_args + regular_args)
+        return function_name, expected_param_count
+
+    return None, None
+
+
 def _try_parse_value(value):
     """Try converting text into Python scalar/list/dict; return _UNPARSED if not possible."""
     if isinstance(value, (int, float, bool, list, tuple, dict)):
@@ -620,6 +643,9 @@ def run_code_with_tests(code, test_cases, input_format=None):
     """Execute competitor code against test cases, supporting script and function styles."""
     results = []
     function_name, expected_param_count = _extract_function_spec(input_format)
+    inferred_function_name, inferred_param_count = (None, None)
+    if not function_name:
+        inferred_function_name, inferred_param_count = _infer_function_spec_from_code(code)
 
     for i, test in enumerate(test_cases):
         try:
@@ -661,6 +687,26 @@ def run_code_with_tests(code, test_cases, input_format=None):
                     raise RuntimeError("Unable to evaluate test case.")
             else:
                 output, expected, passed = _run_single_test_as_script(code, test)
+
+                # Fallback for function-style submissions when problem metadata does not
+                # explicitly declare "Function: ...".
+                if (
+                    not passed
+                    and not output
+                    and str(expected).strip() != ''
+                    and inferred_function_name
+                ):
+                    try:
+                        function_output, function_expected, function_passed = _run_single_test_as_function(
+                            code=code,
+                            test=test,
+                            function_name=inferred_function_name,
+                            expected_param_count=inferred_param_count
+                        )
+                        if function_passed or function_output:
+                            output, expected, passed = function_output, function_expected, function_passed
+                    except Exception:
+                        pass
 
             results.append({
                 'test_num': i + 1,
