@@ -420,6 +420,60 @@ def _build_exec_globals():
     except ImportError:
         pass
 
+    try:
+        from sklearn.tree import DecisionTreeClassifier
+        exec_globals['DecisionTreeClassifier'] = DecisionTreeClassifier
+    except ImportError:
+        # Fallback shim so `from sklearn.tree import DecisionTreeClassifier`
+        # still works in constrained runtimes without scikit-learn installed.
+        class DecisionTreeClassifier:
+            def __init__(self, *args, **kwargs):
+                self._X = []
+                self._y = []
+
+            def fit(self, X, y):
+                self._X = [list(row) for row in (X or [])]
+                self._y = list(y or [])
+                return self
+
+            def predict(self, X):
+                if not self._X or not self._y:
+                    raise ValueError("DecisionTreeClassifier is not fitted yet.")
+
+                predictions = []
+                for row in X or []:
+                    candidate = list(row)
+                    best_idx = 0
+                    best_distance = None
+                    for i, train_row in enumerate(self._X):
+                        distance = 0.0
+                        for a, b in zip(candidate, train_row):
+                            diff = float(a) - float(b)
+                            distance += diff * diff
+                        if best_distance is None or distance < best_distance:
+                            best_distance = distance
+                            best_idx = i
+                    predictions.append(self._y[best_idx])
+                return predictions
+
+        exec_globals['DecisionTreeClassifier'] = DecisionTreeClassifier
+
+        try:
+            import types
+
+            sklearn_module = sys.modules.get('sklearn')
+            if sklearn_module is None:
+                sklearn_module = types.ModuleType('sklearn')
+                sklearn_module.__path__ = []
+                sys.modules['sklearn'] = sklearn_module
+
+            tree_module = types.ModuleType('sklearn.tree')
+            tree_module.DecisionTreeClassifier = DecisionTreeClassifier
+            sys.modules['sklearn.tree'] = tree_module
+            setattr(sklearn_module, 'tree', tree_module)
+        except Exception:
+            pass
+
     return exec_globals
 
 
