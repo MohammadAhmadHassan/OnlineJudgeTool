@@ -15,6 +15,7 @@ import importlib
 import html
 import ast
 import requests
+from urllib.parse import urlparse
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -849,6 +850,29 @@ def get_runtime_setting(name, default=None):
         return default
 
 
+def get_judge_backend_info():
+    """Return the currently configured execution backend for display."""
+    judge_url = str(get_runtime_setting("JUDGE_API_URL", "") or "").rstrip("/")
+    if not judge_url:
+        return {
+            "mode": "local",
+            "label": "Local Streamlit fallback",
+            "detail": "JUDGE_API_URL is not configured.",
+        }
+
+    try:
+        parsed = urlparse(judge_url)
+        display_url = parsed.netloc or judge_url
+    except Exception:
+        display_url = judge_url
+
+    return {
+        "mode": "remote",
+        "label": "Remote judge service",
+        "detail": display_url,
+    }
+
+
 def make_judge_error_results(test_cases, message):
     """Return test-shaped failures when the remote judge is unavailable."""
     if not test_cases:
@@ -918,6 +942,8 @@ def run_code_with_remote_judge(code, test_cases, input_format=None):
     if not isinstance(results, list):
         raise RuntimeError("Remote judge returned an invalid response")
 
+    st.session_state.last_judge_backend = f"Remote judge: {get_judge_backend_info()['detail']}"
+    st.session_state.last_judge_backend_status = "success"
     return normalize_remote_judge_results(results, test_cases)
 
 
@@ -927,8 +953,12 @@ def run_code_with_tests(code, test_cases, input_format=None):
         try:
             return run_code_with_remote_judge(code, test_cases, input_format=input_format)
         except Exception as e:
+            st.session_state.last_judge_backend = f"Remote judge: {get_judge_backend_info()['detail']}"
+            st.session_state.last_judge_backend_status = "error"
             return make_judge_error_results(test_cases, f"Judge service error: {e}")
 
+    st.session_state.last_judge_backend = "Local Streamlit fallback"
+    st.session_state.last_judge_backend_status = "success"
     return run_code_with_tests_local(code, test_cases, input_format=input_format)
 
 
@@ -1069,10 +1099,24 @@ else:
     
     # Sidebar
     with st.sidebar:
+        judge_backend = get_judge_backend_info()
+        st.markdown("### Execution Backend")
+        if judge_backend["mode"] == "remote":
+            st.success(judge_backend["label"])
+            st.caption(judge_backend["detail"])
+        else:
+            st.warning(judge_backend["label"])
+            st.caption(judge_backend["detail"])
+
+        last_backend = st.session_state.get("last_judge_backend")
+        if last_backend:
+            last_status = st.session_state.get("last_judge_backend_status", "unknown")
+            st.caption(f"Last run: {last_backend} ({last_status})")
+
         st.markdown(f"### 👤 {competitor_name}")
 
         st.markdown("### 🔔 Live Alerts")
-        st.caption("Live rejection checks run automatically every 10 seconds.")
+        st.caption(f"Live rejection checks run automatically every {NOTIFICATION_REFRESH_SECONDS} seconds.")
         if st.button("Check notifications now", use_container_width=True):
             invalidate_cached_competitor_data()
             st.rerun()
@@ -1405,6 +1449,12 @@ else:
         with col2:
             st.markdown("### 🧪 Test Results")
             
+            if st.session_state.get("last_judge_backend"):
+                st.caption(
+                    f"Execution backend: {st.session_state.last_judge_backend} "
+                    f"({st.session_state.get('last_judge_backend_status', 'unknown')})"
+                )
+
             if st.session_state.test_results:
                 results = st.session_state.test_results
                 
