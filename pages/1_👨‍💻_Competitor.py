@@ -14,6 +14,7 @@ import time
 import importlib
 import html
 import ast
+import requests
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,15 +107,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize data manager
-@st.cache_resource
-def get_data_manager():
-    return create_data_manager()
+# Initialize data manager per session instead of using a global cached resource.
+# This avoids one slow Firebase initialization blocking every connected user.
+if 'data_manager' not in st.session_state:
+    st.session_state.data_manager = create_data_manager()
 
-data_manager = get_data_manager()
+data_manager = st.session_state.data_manager
 
-# Live rejection notifications refresh every 10 seconds.
-NOTIFICATION_REFRESH_SECONDS = 10
+# Live rejection notifications refresh every 30 seconds by default.
+try:
+    NOTIFICATION_REFRESH_SECONDS = int(os.environ.get("NOTIFICATION_REFRESH_SECONDS", "30"))
+except ValueError:
+    NOTIFICATION_REFRESH_SECONDS = 30
 FINAL_COMPETITION_TITLE = "FinalCompetition"
 FINAL_COMPETITION_TITLE_ALIASES = ["FinalCompetion"]
 FINAL_COMPETITION_WEEK = 19
@@ -741,8 +745,8 @@ def _run_single_test_as_function(code, test, function_name, expected_param_count
     raise RuntimeError("Unable to evaluate function call.")
 
 
-# Function to run code with test cases
-def run_code_with_tests(code, test_cases, input_format=None):
+# Function to run code with test cases locally.
+def run_code_with_tests_local(code, test_cases, input_format=None):
     """Execute competitor code against test cases, supporting script and function styles."""
     results = []
     function_name, expected_param_count = _extract_function_spec(input_format)
@@ -831,6 +835,101 @@ def run_code_with_tests(code, test_cases, input_format=None):
             })
 
     return results
+
+
+def get_runtime_setting(name, default=None):
+    """Read deployment settings from environment first, then Streamlit secrets."""
+    value = os.environ.get(name)
+    if value not in [None, ""]:
+        return value
+
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def make_judge_error_results(test_cases, message):
+    """Return test-shaped failures when the remote judge is unavailable."""
+    if not test_cases:
+        test_cases = [{"input": "", "output": ""}]
+
+    return [
+        {
+            'test_num': i + 1,
+            'passed': False,
+            'input': str(test.get('input', '')) if isinstance(test, dict) else '',
+            'expected': str(test.get('output', '')) if isinstance(test, dict) else '',
+            'output': '',
+            'error': message,
+        }
+        for i, test in enumerate(test_cases)
+    ]
+
+
+def normalize_remote_judge_results(results, test_cases):
+    """Coerce remote judge payloads into the shape expected by the UI."""
+    normalized = []
+    for i, result in enumerate(results):
+        test = test_cases[i] if i < len(test_cases) and isinstance(test_cases[i], dict) else {}
+        result = result if isinstance(result, dict) else {}
+        normalized.append({
+            'test_num': result.get('test_num', i + 1),
+            'passed': bool(result.get('passed', False)),
+            'input': str(result.get('input', test.get('input', ''))),
+            'expected': str(result.get('expected', test.get('output', ''))),
+            'output': str(result.get('output', '')),
+            'error': result.get('error'),
+        })
+    return normalized
+
+
+def run_code_with_remote_judge(code, test_cases, input_format=None):
+    """Execute tests using the external judge service."""
+    judge_url = str(get_runtime_setting("JUDGE_API_URL", "") or "").rstrip("/")
+    judge_token = str(get_runtime_setting("JUDGE_API_TOKEN", "") or "")
+
+    if not judge_url:
+        raise RuntimeError("JUDGE_API_URL is not configured")
+
+    try:
+        request_timeout = int(get_runtime_setting("JUDGE_REQUEST_TIMEOUT_SECONDS", "20"))
+    except ValueError:
+        request_timeout = 20
+
+    headers = {"Content-Type": "application/json"}
+    if judge_token:
+        headers["X-Judge-Token"] = judge_token
+
+    response = requests.post(
+        f"{judge_url}/run",
+        json={
+            "code": code,
+            "test_cases": test_cases,
+            "input_format": input_format,
+        },
+        headers=headers,
+        timeout=request_timeout,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise RuntimeError("Remote judge returned an invalid response")
+
+    return normalize_remote_judge_results(results, test_cases)
+
+
+def run_code_with_tests(code, test_cases, input_format=None):
+    """Run tests remotely when configured; otherwise use the local fallback."""
+    if get_runtime_setting("JUDGE_API_URL"):
+        try:
+            return run_code_with_remote_judge(code, test_cases, input_format=input_format)
+        except Exception as e:
+            return make_judge_error_results(test_cases, f"Judge service error: {e}")
+
+    return run_code_with_tests_local(code, test_cases, input_format=input_format)
 
 
 def get_judge_status_badge(judge_approval, has_submission):
