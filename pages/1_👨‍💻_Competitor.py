@@ -534,6 +534,8 @@ def _parse_function_args(raw_input, expected_param_count=None):
     if isinstance(raw_input, dict):
         return [], dict(raw_input)
     if isinstance(raw_input, (list, tuple)):
+        if expected_param_count == 1:
+            return [list(raw_input)], {}
         return list(raw_input), {}
 
     raw_text = '' if raw_input is None else str(raw_input)
@@ -556,7 +558,10 @@ def _parse_function_args(raw_input, expected_param_count=None):
 
     lines = raw_text.splitlines()
     if len(lines) > 1:
-        return [_parse_token(line) for line in lines], {}
+        parsed_lines = [_parse_token(line) for line in lines]
+        if expected_param_count == 1:
+            return [parsed_lines], {}
+        return parsed_lines, {}
 
     line = lines[0] if lines else stripped
 
@@ -613,29 +618,51 @@ def _run_single_test_as_function(code, test, function_name, expected_param_count
         raise NameError(f"Function '{function_name}' not found.")
 
     args, kwargs = _parse_function_args(test.get('input', ''), expected_param_count)
-
-    call_stdout_capture = io.StringIO()
-    with contextlib.redirect_stdout(call_stdout_capture):
-        result = target_function(*args, **kwargs)
-
-    printed_output = call_stdout_capture.getvalue().strip()
     expected = str(test.get('output', '')).strip()
+    parsed_expected = _try_parse_value(expected)
 
-    if result is None:
-        output = printed_output
-    else:
-        output = _normalize_return_value(result)
-        if not output and printed_output:
-            output = printed_output
+    call_candidates = [(args, kwargs)]
+    if expected_param_count == 1 and not kwargs and len(args) == 1 and not isinstance(args[0], (list, tuple)):
+        # Some imported datasets encode list-like one-argument inputs as plain text,
+        # e.g. "zara" for make_tags(names). Try wrapping into a single-item list too.
+        call_candidates.append(([[args[0]]], {}))
 
-    passed = output == expected
+    first_exception = None
+    first_result = None
 
-    if not passed and result is not None:
-        parsed_expected = _try_parse_value(expected)
-        if parsed_expected is not _UNPARSED and result == parsed_expected:
-            passed = True
+    for candidate_args, candidate_kwargs in call_candidates:
+        try:
+            call_stdout_capture = io.StringIO()
+            with contextlib.redirect_stdout(call_stdout_capture):
+                result = target_function(*candidate_args, **candidate_kwargs)
 
-    return output, expected, passed
+            printed_output = call_stdout_capture.getvalue().strip()
+            if result is None:
+                output = printed_output
+            else:
+                output = _normalize_return_value(result)
+                if not output and printed_output:
+                    output = printed_output
+
+            passed = output == expected
+            if not passed and result is not None:
+                if parsed_expected is not _UNPARSED and result == parsed_expected:
+                    passed = True
+
+            if first_result is None or (not first_result[0] and output):
+                first_result = (output, expected, passed)
+
+            if passed:
+                return output, expected, passed
+        except Exception as call_error:
+            if first_exception is None:
+                first_exception = call_error
+
+    if first_result is not None:
+        return first_result
+    if first_exception is not None:
+        raise first_exception
+    raise RuntimeError("Unable to evaluate function call.")
 
 
 # Function to run code with test cases
