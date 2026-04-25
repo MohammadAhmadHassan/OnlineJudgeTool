@@ -131,14 +131,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize data manager
-@st.cache_resource
-def get_data_manager():
-    return create_data_manager()
+# Initialize data manager per session instead of using a global cached resource.
+# This avoids one slow Firebase initialization blocking every connected user.
+if "data_manager" not in st.session_state:
+    st.session_state.data_manager = create_data_manager()
 
-data_manager = get_data_manager()
+data_manager = st.session_state.data_manager
 
-DEFAULT_SPECTATOR_REFRESH_SECONDS = 3
+try:
+    DEFAULT_SPECTATOR_REFRESH_SECONDS = int(os.environ.get("SPECTATOR_REFRESH_SECONDS", "30"))
+except ValueError:
+    DEFAULT_SPECTATOR_REFRESH_SECONDS = 30
 
 
 def get_streamlit_autorefresh_fn():

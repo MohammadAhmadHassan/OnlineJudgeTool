@@ -22,12 +22,12 @@ st.set_page_config(
 
 st.title("⚙️ Problem Management Dashboard")
 
-# Initialize data manager
-@st.cache_resource
-def get_data_manager():
-    return create_data_manager()
+# Initialize data manager per session instead of using a global cached resource.
+# This avoids one slow Firebase initialization blocking every connected user.
+if "data_manager" not in st.session_state:
+    st.session_state.data_manager = create_data_manager()
 
-data_manager = get_data_manager()
+data_manager = st.session_state.data_manager
 backend_type = data_manager.get_backend_type() if hasattr(data_manager, "get_backend_type") else "unknown"
 
 

@@ -73,12 +73,18 @@ STATUS_LABEL = {
 }
 
 
-@st.cache_resource
-def get_data_manager():
-    return create_data_manager()
+# Initialize data manager per session instead of using a global cached resource.
+# This avoids one slow Firebase initialization blocking every connected user.
+if "data_manager" not in st.session_state:
+    st.session_state.data_manager = create_data_manager()
 
 
-data_manager = get_data_manager()
+data_manager = st.session_state.data_manager
+
+try:
+    DEFAULT_JUDGE_REFRESH_SECONDS = int(os.environ.get("JUDGE_REFRESH_SECONDS", "30"))
+except ValueError:
+    DEFAULT_JUDGE_REFRESH_SECONDS = 30
 
 
 def ensure_judge_session():
@@ -89,7 +95,7 @@ def ensure_judge_session():
     if "judge_auto_refresh_enabled" not in st.session_state:
         st.session_state.judge_auto_refresh_enabled = True
     if "judge_refresh_interval_seconds" not in st.session_state:
-        st.session_state.judge_refresh_interval_seconds = 5
+        st.session_state.judge_refresh_interval_seconds = DEFAULT_JUDGE_REFRESH_SECONDS
 
 
 ensure_judge_session()
